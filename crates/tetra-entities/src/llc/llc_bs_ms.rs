@@ -92,6 +92,10 @@ impl Llc {
         }
     }
 
+    fn is_rx_gain_test_mode(&self) -> bool {
+        self.config.state_read().rx_gain_test_mode
+    }
+
     /// Schedule an ACK to be sent at a later time
     pub fn schedule_outgoing_ack(&mut self, dltime: TdmaTime, addr: TetraAddress, ns: u8) {
         self.scheduled_out_acks.push_back(ScheduledOutAck {
@@ -408,6 +412,10 @@ impl Llc {
             }
 
             _ => {
+                if self.is_rx_gain_test_mode() {
+                    tracing::warn!("rx_tma_unitdata_ind: unknown LlcPduType: {:?}, dropping", pdu_type);
+                    return;
+                }
                 panic!();
             }
         }
