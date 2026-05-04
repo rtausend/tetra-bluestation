@@ -86,6 +86,8 @@ struct RxGainSweepRuntime {
     detected_slot_times: Vec<TdmaTime>,
     /// Timestamp when measurement window started (Unix seconds)
     window_start_unix: u64,
+    /// Counting starts only after first detected burst to avoid idle startup skew.
+    measurement_started: bool,
 }
 
 pub struct PhyBs<D: RxTxDev> {
@@ -542,6 +544,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 runtime.measured_slots = 0;
                 runtime.detected_slot_times.clear();
                 runtime.window_start_unix = 0;
+                runtime.measurement_started = false;
                 runtime.window_decode_baseline = config.state_read().rx_gain_decode_counters.clone();
                 runtime.phase = RxGainSweepPhase::Settling;
             }
@@ -550,11 +553,7 @@ impl<D: RxTxDev> PhyBs<D> {
                     runtime.settling_remaining -= 1;
                 } else {
                     tracing::info!(combo_index = runtime.current_idx, "rx_gain_sweep_measure_start");
-                    // Record start time for measurement window duration calculation
-                    runtime.window_start_unix = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
+                    // Actual counting starts on first detected burst in tick_post.
                     runtime.phase = RxGainSweepPhase::MeasureWindow;
                 }
             }
@@ -580,12 +579,32 @@ impl<D: RxTxDev> PhyBs<D> {
     }
 
     fn rx_gain_sweep_tick_post(&mut self, detected_bursts: u32, slot_detected: [u32; 4]) {
+        let config = self.config.clone();
         let Some(runtime) = self.rx_gain_sweep.as_mut() else {
             return;
         };
 
         if runtime.phase != RxGainSweepPhase::MeasureWindow {
             return;
+        }
+
+        if !runtime.measurement_started {
+            if detected_bursts == 0 {
+                return;
+            }
+
+            runtime.measurement_started = true;
+            runtime.window_start_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            runtime.window_decode_baseline = config.state_read().rx_gain_decode_counters.clone();
+
+            tracing::info!(
+                combo_index = runtime.current_idx,
+                bursts_in_tick = detected_bursts,
+                "rx_gain_sweep_first_burst_detected_start_counting"
+            );
         }
 
         runtime.measured_bursts = runtime.measured_bursts.saturating_add(detected_bursts);
@@ -727,6 +746,7 @@ impl<D: RxTxDev> PhyBs<D> {
                             results: Vec::new(),
                             detected_slot_times: Vec::new(),
                             window_start_unix: 0,
+                            measurement_started: false,
                         })
                     })
             } else {
