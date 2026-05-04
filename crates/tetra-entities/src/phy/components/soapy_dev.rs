@@ -119,13 +119,23 @@ impl RxTxDevSoapySdr {
     }
 
     fn reinitialize_with_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
+        tracing::info!(
+            gain_combo = ?gains,
+            "Reinitializing device with new RX gain combo override (shutting down and reloading)"
+        );
         self.rx_dsp = None;
         self.tx_dsp = None;
         self.sdr.shutdown_streams();
 
+        // Wait for driver to fully release the device before reloading.
+        // This helps prevent timing issues with USB devices and drivers.
+        tracing::debug!("Waiting 1 second for driver to release device...");
+        std::thread::sleep(std::time::Duration::from_secs(1));
+
         let cfg = self.cfg.clone();
         let rebuilt = Self::build_from_cfg(&cfg, Some(gains))?;
         *self = rebuilt;
+        tracing::info!("Device reinitialized and streams reactivated with new gain combo");
         Ok(())
     }
 
@@ -192,17 +202,8 @@ impl RxTxDev for RxTxDevSoapySdr {
     }
 
     fn reinitialize_and_apply_rx_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
-        // First try to apply gains on the already-running device (fast path).
-        // This preserves RX buffer synchronization and initial_time.
-        if let Ok(()) = self.sdr.apply_rx_gain_combo(gains) {
-            tracing::debug!("Successfully applied RX gain combo on running device without restart");
-            return Ok(());
-        }
-
-        // If that fails, fall back to full device restart with gain override.
-        // This is the "hard reset" that ensures gains are applied even if
-        // the running device cannot be reconfigured.
-        tracing::warn!("Runtime RX gain application failed; falling back to full device restart with gain override");
+        // Always perform a full device reload with the new gain combo override.
+        // This guarantees the gains are actually applied and avoids synchronization issues.
         self.reinitialize_with_gain_combo(gains)
     }
 }

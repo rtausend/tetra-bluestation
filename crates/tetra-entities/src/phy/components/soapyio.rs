@@ -172,6 +172,10 @@ impl SoapyIo {
             }
 
             if let Some(override_gains) = rx_gain_override {
+                tracing::info!(
+                    num_override_gains = override_gains.len(),
+                    "Applying RX gain override(s) during device initialization"
+                );
                 for (name, gain) in override_gains {
                     let canonical_name = Self::resolve_rx_gain_name_for_device(&dev, rx_ch, name.as_str())?;
 
@@ -185,6 +189,16 @@ impl SoapyIo {
                         dev.gain_element(soapysdr::Direction::Rx, rx_ch, canonical_name.as_str())
                     );
                     let delta = (applied - *gain).abs();
+                    
+                    tracing::info!(
+                        gain_name = name.as_str(),
+                        canonical_name = canonical_name.as_str(),
+                        requested = *gain,
+                        applied = applied,
+                        delta = delta,
+                        "RX gain override applied during init"
+                    );
+                    
                     if delta > 0.25 {
                         return Err(soapysdr::Error {
                             code: soapysdr::ErrorCode::Other,
