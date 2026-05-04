@@ -20,9 +20,6 @@ use crate::{MessageQueue, TetraEntityTrait};
 use super::components::phy_io_file::PhyIoFile;
 use super::components::rx_gain_stats::{RxGainExportWriter, RxGainSummaryExport, RxGainWindowExport};
 
-const RX_GAIN_SWEEP_RESUME_IDX_ENV: &str = "TETRA_RX_GAIN_SWEEP_RESUME_IDX";
-const RX_GAIN_SWEEP_RUN_ID_ENV: &str = "TETRA_RX_GAIN_SWEEP_RUN_ID";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RxGainSweepPhase {
     ApplyGains,
@@ -78,7 +75,6 @@ struct RxGainSweepRuntime {
     required_ul_slots: Vec<u8>,
     min_slot_crc_pass_rate: Option<f64>,
     auto_exit: bool,
-    restart_process_per_combo: bool,
     test_device_type: String,
     test_signal_mode: String,
     test_level_dbm: f64,
@@ -121,49 +117,6 @@ pub struct PhyBs<D: RxTxDev> {
 }
 
 impl<D: RxTxDev> PhyBs<D> {
-    fn restart_process_for_rx_gain_sweep(next_combo_idx: usize, run_started_unix: u64) -> ! {
-        let exe_path = match std::env::current_exe() {
-            Ok(path) => path,
-            Err(err) => {
-                tracing::error!("Failed to determine current executable path for restart: {}", err);
-                std::process::exit(2);
-            }
-        };
-
-        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-
-        tracing::warn!(
-            next_combo_idx,
-            run_started_unix,
-            "Restarting full process for next RX gain combo"
-        );
-
-        let mut cmd = std::process::Command::new(&exe_path);
-        cmd.args(args)
-            .env(RX_GAIN_SWEEP_RESUME_IDX_ENV, next_combo_idx.to_string())
-            .env(RX_GAIN_SWEEP_RUN_ID_ENV, run_started_unix.to_string());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-
-            let err = cmd.exec();
-            tracing::error!("Process restart via exec() failed: {}", err);
-            std::process::exit(2);
-        }
-
-        #[cfg(not(unix))]
-        {
-            match cmd.spawn() {
-                Ok(_) => std::process::exit(0),
-                Err(err) => {
-                    tracing::error!("Process restart via spawn() failed: {}", err);
-                    std::process::exit(2);
-                }
-            }
-        }
-    }
-
     fn expand_gain_values(from: f64, to: f64, step: f64) -> Vec<f64> {
         if step <= 0.0 || from > to {
             return Vec::new();
@@ -602,9 +555,6 @@ impl<D: RxTxDev> PhyBs<D> {
 
                 runtime.current_idx += 1;
                 if runtime.current_idx < runtime.combos.len() {
-                    if runtime.restart_process_per_combo {
-                        Self::restart_process_for_rx_gain_sweep(runtime.current_idx, runtime.run_started_unix);
-                    }
                     runtime.phase = RxGainSweepPhase::ApplyGains;
                 } else {
                     runtime.phase = RxGainSweepPhase::Completed;
@@ -763,32 +713,10 @@ impl<D: RxTxDev> PhyBs<D> {
                             return None;
                         }
 
-                        let resume_idx = std::env::var(RX_GAIN_SWEEP_RESUME_IDX_ENV)
-                            .ok()
-                            .and_then(|v| v.parse::<usize>().ok())
-                            .unwrap_or(0);
-
-                        let run_started_unix = std::env::var(RX_GAIN_SWEEP_RUN_ID_ENV)
-                            .ok()
-                            .and_then(|v| v.parse::<u64>().ok())
-                            .unwrap_or_else(|| {
-                                SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs()
-                            });
-
-                        let start_idx = resume_idx.min(combos.len().saturating_sub(1));
-                        if resume_idx > 0 {
-                            tracing::info!(
-                                resume_idx,
-                                start_idx,
-                                total_combos = combos.len(),
-                                run_started_unix,
-                                "Resuming RX gain sweep after process restart"
-                            );
-                        }
-
+                        let run_started_unix = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
                         let run_id = format!("{}", run_started_unix);
                         let export_writer = match RxGainExportWriter::new("rx_gain_sweep_results", run_id) {
                             Ok(w) => Some(w),
@@ -801,7 +729,7 @@ impl<D: RxTxDev> PhyBs<D> {
                         Some(RxGainSweepRuntime {
                             phase: RxGainSweepPhase::ApplyGains,
                             combos,
-                            current_idx: start_idx,
+                            current_idx: 0,
                             settling_slots: sweep.settling_slots,
                             settling_remaining: 0,
                             window_bursts: sweep.window_bursts,
@@ -819,7 +747,6 @@ impl<D: RxTxDev> PhyBs<D> {
                             },
                             min_slot_crc_pass_rate: sweep.min_slot_crc_pass_rate,
                             auto_exit: sweep.auto_exit,
-                            restart_process_per_combo: sweep.restart_process_per_combo,
                             test_device_type: sweep
                                 .test_device_type
                                 .clone()
@@ -848,10 +775,8 @@ impl<D: RxTxDev> PhyBs<D> {
         if let Some(runtime) = &rx_gain_sweep {
             tracing::info!(
                 combos = runtime.combos.len(),
-                start_combo_index = runtime.current_idx,
                 window_bursts = runtime.window_bursts,
                 settling_slots = runtime.settling_slots,
-                restart_process_per_combo = runtime.restart_process_per_combo,
                 "rx_gain_sweep_enabled"
             );
         }
