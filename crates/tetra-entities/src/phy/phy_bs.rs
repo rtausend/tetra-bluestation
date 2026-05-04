@@ -494,6 +494,37 @@ impl<D: RxTxDev> PhyBs<D> {
                 let combo = &runtime.combos[runtime.current_idx];
                 if let Err(err) = self.rxtxdev.apply_rx_gain_combo(combo) {
                     tracing::error!("Failed to apply runtime RX gain combo: {:?}", err);
+
+                    if config.state_read().rx_gain_test_mode {
+                        let exe = std::env::current_exe();
+                        let args: Vec<_> = std::env::args_os().skip(1).collect();
+
+                        match exe {
+                            Ok(exe_path) => match std::process::Command::new(&exe_path).args(&args).spawn() {
+                                Ok(child) => {
+                                    tracing::error!(
+                                        pid = child.id(),
+                                        "RX gain test: restarting process after gain apply failure"
+                                    );
+                                }
+                                Err(spawn_err) => {
+                                    tracing::error!(
+                                        "RX gain test: failed to spawn restart process: {}",
+                                        spawn_err
+                                    );
+                                }
+                            },
+                            Err(exe_err) => {
+                                tracing::error!(
+                                    "RX gain test: failed to resolve current executable: {}",
+                                    exe_err
+                                );
+                            }
+                        }
+
+                        std::process::exit(2);
+                    }
+
                     runtime.phase = RxGainSweepPhase::Completed;
                     return;
                 }

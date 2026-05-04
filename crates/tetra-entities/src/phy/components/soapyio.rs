@@ -342,6 +342,38 @@ impl SoapyIo {
         for (name, gain) in gains {
             self.dev
                 .set_gain_element(soapysdr::Direction::Rx, self.rx_ch, name.as_str(), *gain)?;
+
+            // Read back configured value so runtime sweeps can verify what the device accepted.
+            let applied = self
+                .dev
+                .gain_element(soapysdr::Direction::Rx, self.rx_ch, name.as_str())?;
+            let delta = (applied - *gain).abs();
+
+            tracing::debug!(
+                gain_name = name.as_str(),
+                requested_gain = *gain,
+                applied_gain = applied,
+                delta,
+                "Runtime RX gain set/readback"
+            );
+
+            if delta > 0.25 {
+                tracing::warn!(
+                    gain_name = name.as_str(),
+                    requested_gain = *gain,
+                    applied_gain = applied,
+                    delta,
+                    "Runtime RX gain differs from requested value"
+                );
+
+                return Err(soapysdr::Error {
+                    code: soapysdr::ErrorCode::Other,
+                    message: format!(
+                        "Runtime RX gain mismatch for {}: requested {}, applied {}, delta {}",
+                        name, gain, applied, delta
+                    ),
+                });
+            }
         }
 
         tracing::debug!(rx_gain_combo = ?gains, "Applied runtime RX gain combo");
