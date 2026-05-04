@@ -53,4 +53,9 @@ pub trait RxTxDev {
     fn apply_rx_gain_combo(&mut self, _gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
         Ok(())
     }
+
+    /// Optional runtime hook to reinitialize the device between gain combos.
+    fn reinitialize_for_gain_sweep(&mut self) -> Result<(), RxTxDevError> {
+        Ok(())
+    }
 }

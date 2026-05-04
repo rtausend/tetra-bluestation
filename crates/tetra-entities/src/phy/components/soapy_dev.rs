@@ -39,6 +39,7 @@ pub struct PhyConfig<'a> {
 }
 
 pub struct RxTxDevSoapySdr {
+    cfg: SharedConfig,
     sdr: soapyio::SoapyIo,
     rx_dsp: Option<RxDsp>,
     tx_dsp: Option<TxDsp>,
@@ -47,7 +48,7 @@ pub struct RxTxDevSoapySdr {
 type FftPlanner = rustfft::FftPlanner<RealSample>;
 
 impl RxTxDevSoapySdr {
-    pub fn new(cfg: &SharedConfig) -> Self {
+    fn build_from_cfg(cfg: &SharedConfig) -> Result<Self, RxTxDevError> {
         let mut fft_planner = rustfft::FftPlanner::new();
 
         // TODO FIXME currently no MS and MON support in the below statement; need to fix
@@ -79,9 +80,13 @@ impl RxTxDevSoapySdr {
             ..Default::default()
         };
 
-        let mut sdr = soapyio::SoapyIo::new(cfg).unwrap();
+        let mut sdr = soapyio::SoapyIo::new(cfg).map_err(|err| {
+            tracing::error!("Failed to initialize SoapyIO for RX gain sweep: {}", err);
+            RxTxDevError::RxReadError
+        })?;
 
-        Self {
+        Ok(Self {
+            cfg: cfg.clone(),
             rx_dsp: if sdr.rx_enabled() {
                 Some(RxDsp::new(&mut fft_planner, &mut sdr, &phy_config))
             } else {
@@ -95,7 +100,18 @@ impl RxTxDevSoapySdr {
             },
 
             sdr,
-        }
+        })
+    }
+
+    pub fn new(cfg: &SharedConfig) -> Self {
+        Self::build_from_cfg(cfg).expect("Failed to initialize SoapySDR device")
+    }
+
+    fn reinitialize_from_config(&mut self) -> Result<(), RxTxDevError> {
+        let cfg = self.cfg.clone();
+        let rebuilt = Self::build_from_cfg(&cfg)?;
+        *self = rebuilt;
+        Ok(())
     }
 
     /// Process a block of received signal.
@@ -154,6 +170,10 @@ impl RxTxDev for RxTxDevSoapySdr {
 
     fn apply_rx_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
         self.sdr.apply_rx_gain_combo(gains).map_err(|_| RxTxDevError::RxReadError)
+    }
+
+    fn reinitialize_for_gain_sweep(&mut self) -> Result<(), RxTxDevError> {
+        self.reinitialize_from_config()
     }
 }
 
