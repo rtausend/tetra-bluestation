@@ -130,7 +130,7 @@ impl RxTxDevSoapySdr {
         // Wait for driver/USB to fully release the device before reloading.
         // USB devices need time to complete disconnect sequence and free driver resources.
         // Insufficient wait time causes device to be in an invalid state on reconnect.
-        let wait_secs = 3;
+        let wait_secs = 1;
         tracing::info!("Waiting {} seconds for driver to fully release device...", wait_secs);
         std::thread::sleep(std::time::Duration::from_secs(wait_secs));
 
