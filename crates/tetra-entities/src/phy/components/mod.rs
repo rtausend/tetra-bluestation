@@ -18,3 +18,5 @@ pub mod soapy_dev;
 pub mod slotter;
 
 pub mod phy_io_file;
+pub mod rx_test_devices;
+pub mod rx_gain_stats;

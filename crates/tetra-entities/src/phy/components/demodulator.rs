@@ -581,6 +581,9 @@ impl SlotBurstFinder {
     fn get_burst<'a>(&'a mut self) -> RxBurstBits<'a> {
         RxBurstBits {
             train_type: self.train_type,
+            train_errs: self.train_errs,
+            burst_pos: self.burst_pos,
+            burst_len: self.burst_len,
             bits: &self.bits[self.burst_pos..self.burst_pos + self.burst_len],
         }
     }

@@ -42,6 +42,23 @@ pub fn from_toml_str(toml_str: &str) -> Result<StackConfig, Box<dyn std::error::
         if !extra_keys_filtered.is_empty() {
             return Err(format!("Unrecognized fields: phy_io.soapysdr::{:?}", extra_keys_filtered).into());
         }
+
+        if let Some(ref sweep) = soapy.rx_gain_sweep {
+            if !sweep.extra.is_empty() {
+                return Err(format!("Unrecognized fields: phy_io.soapysdr.rx_gain_sweep::{:?}", sorted_keys(&sweep.extra)).into());
+            }
+
+            for (gain_name, gain_range) in &sweep.gains {
+                if !gain_range.extra.is_empty() {
+                    return Err(format!(
+                        "Unrecognized fields: phy_io.soapysdr.rx_gain_sweep.gains.{}::{:?}",
+                        gain_name,
+                        sorted_keys(&gain_range.extra)
+                    )
+                    .into());
+                }
+            }
+        }
     }
     if !root.net_info.extra.is_empty() {
         return Err(format!("Unrecognized fields in net_info: {:?}", sorted_keys(&root.net_info.extra)).into());

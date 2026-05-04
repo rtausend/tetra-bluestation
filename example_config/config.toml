@@ -59,6 +59,31 @@ rx_freq = 433025000
 # To adjust LNA gain to optimize RX performance on a LimeSDR or SXceiver:
 # rx_gain_lna = 30.0
 
+# Optional autonomous RX gain sweep test mode.
+# Enable with CLI flag: --rx-gain-test
+# [phy_io.soapysdr.rx_gain_sweep]
+# enabled = true
+# strategy = "grid"
+# window_bursts = 500
+# settling_slots = 8
+# auto_exit = true
+# test_signal_profile = "t1_all_ul_slots"
+# test_device_type = "stabilock4032"
+# required_ul_slots = [0, 1, 2, 3]
+# min_slot_crc_pass_rate = 0.95
+# test_tx_power_dbm = -85.0
+# test_level_dbm = -95.0
+#
+# [phy_io.soapysdr.rx_gain_sweep.gains.pga]
+# from = 0.0
+# to = 30.0
+# step = 1.0
+#
+# [phy_io.soapysdr.rx_gain_sweep.gains.lna]
+# from = 0.0
+# to = 30.0
+# step = 3.0
+
 ###############################################################################
 
 # Network Information

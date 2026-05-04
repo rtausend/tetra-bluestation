@@ -174,22 +174,66 @@ impl LmacBs {
         }
     }
 
+    fn record_rx_gain_decode_metric(&self, ul_time: TdmaTime, decode_attempted: bool, decode_success: bool, crc_ok: bool) {
+        if !self.config.state_read().rx_gain_test_mode {
+            return;
+        }
+
+        let mut state = self.config.state_write();
+        state
+            .rx_gain_decode_counters
+            .record(ul_time.t, decode_attempted, decode_success, crc_ok);
+    }
+
     fn rx_blk_traffic(&mut self, queue: &mut MessageQueue, blk: TpUnitdataInd, lchan: LogicalChannel, ul_time: TdmaTime) {
+        let block_num = blk.block_num;
+
         // Only full-slot TCH/S supported for now
         if lchan != LogicalChannel::TchS || blk.block_num != PhyBlockNum::Both {
+            tracing::info!(
+                ts = %ul_time,
+                logical_channel = ?lchan,
+                block_num = ?block_num,
+                decode_attempted = false,
+                decode_success = false,
+                crc_ok = false,
+                "lmac_rx_measure_traffic"
+            );
             tracing::trace!(
                 "rx_blk_traffic: ignoring partial/unsupported lchan={:?} blk_num={:?}",
                 lchan,
                 blk.block_num
             );
+            self.record_rx_gain_decode_metric(ul_time, false, false, false);
             return;
         }
 
         let (decoded, crc_ok) = errorcontrol::decode_tp(lchan, blk.block, self.scrambling_code);
         let Some(acelp_bits) = decoded else {
+            tracing::info!(
+                ts = %ul_time,
+                logical_channel = ?lchan,
+                block_num = ?block_num,
+                decode_attempted = true,
+                decode_success = false,
+                crc_ok,
+                "lmac_rx_measure_traffic"
+            );
+            self.record_rx_gain_decode_metric(ul_time, true, false, crc_ok);
             tracing::warn!("rx_blk_traffic: decode_tp returned None");
             return;
         };
+
+        tracing::info!(
+            ts = %ul_time,
+            logical_channel = ?lchan,
+            block_num = ?block_num,
+            decode_attempted = true,
+            decode_success = true,
+            crc_ok,
+            "lmac_rx_measure_traffic"
+        );
+        self.record_rx_gain_decode_metric(ul_time, true, true, crc_ok);
 
         if !crc_ok {
             tracing::trace!("rx_blk_traffic: CRC fail (BFI), still forwarding for concealment");
@@ -217,9 +261,26 @@ impl LmacBs {
             lchan
         );
 
+        let ul_time = self.dltime.add_timeslots(-2);
         let block_num = blk.block_num;
         let (type1bits, crc_pass) = errorcontrol::decode_cp(lchan, blk, Some(self.scrambling_code));
-        let type1bits = type1bits.unwrap(); // Guaranteed since scramb code set
+        let decode_success = type1bits.is_some();
+
+        tracing::info!(
+            ts = %ul_time,
+            logical_channel = ?lchan,
+            block_num = ?block_num,
+            decode_attempted = true,
+            decode_success,
+            crc_ok = crc_pass,
+            "lmac_rx_measure_control"
+        );
+        self.record_rx_gain_decode_metric(ul_time, true, decode_success, crc_pass);
+
+        let Some(type1bits) = type1bits else {
+            tracing::warn!("rx_blk_cp: decode_cp returned None");
+            return;
+        };
 
         // tracing::debug!("rx_blk_cp {:?} CRC: {} type1 {:?}",
         //     lchan,

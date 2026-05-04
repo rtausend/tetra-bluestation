@@ -1,6 +1,57 @@
 use std::collections::{HashMap, HashSet};
 use tetra_core::TimeslotAllocator;
 
+#[derive(Debug, Clone, Default)]
+pub struct RxGainDecodeCounters {
+    pub decode_attempted: u64,
+    pub decode_success: u64,
+    pub crc_ok: u64,
+    pub false_positive: u64,
+    pub slot_attempted: [u64; 4],
+    pub slot_crc_ok: [u64; 4],
+}
+
+impl RxGainDecodeCounters {
+    pub fn record(&mut self, timeslot: u8, decode_attempted: bool, decode_success: bool, crc_ok: bool) {
+        if !decode_attempted {
+            return;
+        }
+
+        self.decode_attempted = self.decode_attempted.saturating_add(1);
+        if decode_success {
+            self.decode_success = self.decode_success.saturating_add(1);
+        } else {
+            self.false_positive = self.false_positive.saturating_add(1);
+        }
+
+        let idx = timeslot.saturating_sub(1).min(3) as usize;
+        self.slot_attempted[idx] = self.slot_attempted[idx].saturating_add(1);
+
+        if crc_ok {
+            self.crc_ok = self.crc_ok.saturating_add(1);
+            self.slot_crc_ok[idx] = self.slot_crc_ok[idx].saturating_add(1);
+        }
+    }
+
+    pub fn diff_from(&self, baseline: &Self) -> Self {
+        let mut slot_attempted = [0u64; 4];
+        let mut slot_crc_ok = [0u64; 4];
+        for i in 0..4 {
+            slot_attempted[i] = self.slot_attempted[i].saturating_sub(baseline.slot_attempted[i]);
+            slot_crc_ok[i] = self.slot_crc_ok[i].saturating_sub(baseline.slot_crc_ok[i]);
+        }
+
+        Self {
+            decode_attempted: self.decode_attempted.saturating_sub(baseline.decode_attempted),
+            decode_success: self.decode_success.saturating_sub(baseline.decode_success),
+            crc_ok: self.crc_ok.saturating_sub(baseline.crc_ok),
+            false_positive: self.false_positive.saturating_sub(baseline.false_positive),
+            slot_attempted,
+            slot_crc_ok,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Subscriber {
     pub issi: u32,
@@ -94,6 +145,10 @@ pub struct StackState {
     pub timeslot_alloc: TimeslotAllocator,
     /// Backhaul/network connection to SwMI (e.g., Brew/TetraPack). False -> fallback mode.
     pub network_connected: bool,
+    /// Explicit CLI-enabled autonomous RX gain test mode.
+    pub rx_gain_test_mode: bool,
+    /// Cross-entity decode/CRC counters used by autonomous RX gain sweep ranking.
+    pub rx_gain_decode_counters: RxGainDecodeCounters,
     /// Centralized subscriber registry for local-first routing decisions.
     pub subscribers: SubscriberRegistry,
 }
@@ -172,6 +227,8 @@ impl Default for StackState {
         Self {
             timeslot_alloc: TimeslotAllocator::default(),
             network_connected: false,
+            rx_gain_test_mode: false,
+            rx_gain_decode_counters: RxGainDecodeCounters::default(),
             subscribers: SubscriberRegistry::new(),
         }
     }

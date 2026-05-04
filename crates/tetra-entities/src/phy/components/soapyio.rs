@@ -1,4 +1,5 @@
 use soapysdr;
+use std::collections::HashMap;
 use tetra_config::bluestation::{SharedConfig, StackMode, sec_phy_soapy::CfgSoapySdr};
 
 use tetra_pdus::phy::traits::rxtx_dev::RxTxDevError;
@@ -329,6 +330,22 @@ impl SoapyIo {
 
     pub fn rx_enabled(&self) -> bool {
         self.rx.is_some()
+    }
+
+    /// Apply RX gain element values at runtime.
+    /// This is an internal helper for autonomous gain sweep operation.
+    pub fn apply_rx_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), soapysdr::Error> {
+        if !self.rx_enabled() {
+            return Ok(());
+        }
+
+        for (name, gain) in gains {
+            self.dev
+                .set_gain_element(soapysdr::Direction::Rx, self.rx_ch, name.as_str(), *gain)?;
+        }
+
+        tracing::debug!(rx_gain_combo = ?gains, "Applied runtime RX gain combo");
+        Ok(())
     }
 
     pub fn tx_enabled(&self) -> bool {

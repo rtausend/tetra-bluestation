@@ -95,6 +95,41 @@ impl StackConfig {
                 .as_ref()
                 .expect("SoapySdr config must be set for SoapySdr PhyIo");
 
+            if let Some(sweep) = &soapy_cfg.rx_gain_sweep {
+                if sweep.enabled {
+                    if sweep.gains.is_empty() {
+                        return Err("phy_io.soapysdr.rx_gain_sweep.gains must define at least one gain range when enabled=true");
+                    }
+
+                    if sweep.window_bursts == 0 {
+                        return Err("phy_io.soapysdr.rx_gain_sweep.window_bursts must be > 0");
+                    }
+
+                    for (gain_name, range) in &sweep.gains {
+                        if range.step <= 0.0 {
+                            return Err("rx_gain_sweep gain step must be > 0");
+                        }
+                        if range.from > range.to {
+                            return Err("rx_gain_sweep gain range must satisfy from <= to");
+                        }
+
+                        if !gain_name.is_ascii() {
+                            return Err("rx_gain_sweep gain names must be ASCII");
+                        }
+                    }
+
+                    if sweep.required_ul_slots.iter().any(|slot| *slot > 3) {
+                        return Err("rx_gain_sweep.required_ul_slots entries must be in range 0..=3");
+                    }
+
+                    if let Some(rate) = sweep.min_slot_crc_pass_rate {
+                        if !(0.0..=1.0).contains(&rate) {
+                            return Err("rx_gain_sweep.min_slot_crc_pass_rate must be between 0.0 and 1.0");
+                        }
+                    }
+                }
+            }
+
             let Ok(freq_info) = FreqInfo::from_components(
                 self.cell.freq_band,
                 self.cell.main_carrier,

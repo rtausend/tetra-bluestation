@@ -2,6 +2,7 @@
 //! between SDR device and modulator/demodulator code.
 
 use rustfft;
+use std::collections::HashMap;
 use tetra_config::bluestation::SharedConfig;
 
 use tetra_pdus::phy::traits::rxtx_dev::RxSlotBits;
@@ -123,6 +124,11 @@ impl RxTxDevSoapySdr {
             Ok(false)
         }
     }
+
+    /// Internal runtime interface for autonomous RX gain sweeps.
+    pub fn apply_rx_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
+        self.sdr.apply_rx_gain_combo(gains).map_err(|_| RxTxDevError::RxReadError)
+    }
 }
 
 impl RxTxDev for RxTxDevSoapySdr {
@@ -144,6 +150,10 @@ impl RxTxDev for RxTxDevSoapySdr {
         } else {
             Ok(Default::default())
         }
+    }
+
+    fn apply_rx_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
+        self.sdr.apply_rx_gain_combo(gains).map_err(|_| RxTxDevError::RxReadError)
     }
 }
 

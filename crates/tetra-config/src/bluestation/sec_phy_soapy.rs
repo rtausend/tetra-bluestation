@@ -2,6 +2,37 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use toml::Value;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CfgGainSweepStrategy {
+    #[default]
+    Grid,
+    CoordinateDescent,
+}
+
+#[derive(Debug, Clone)]
+pub struct CfgGainRange {
+    pub from: f64,
+    pub to: f64,
+    pub step: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CfgRxGainSweep {
+    pub enabled: bool,
+    pub strategy: CfgGainSweepStrategy,
+    pub window_bursts: u32,
+    pub settling_slots: u32,
+    pub auto_exit: bool,
+    pub test_signal_profile: Option<String>,
+    pub required_ul_slots: Vec<u8>,
+    pub min_slot_crc_pass_rate: Option<f64>,
+    pub test_device_type: Option<String>,
+    pub test_tx_power_dbm: Option<f64>,
+    pub test_level_dbm: Option<f64>,
+    pub gains: HashMap<String, CfgGainRange>,
+}
+
 /// SoapySDR configuration
 #[derive(Debug, Clone)]
 pub struct CfgSoapySdr {
@@ -30,6 +61,8 @@ pub struct CfgSoapySdr {
     pub rx_ch: Option<usize>,
     /// TX channel number
     pub tx_ch: Option<usize>,
+    /// Optional autonomous RX gain sweep test configuration.
+    pub rx_gain_sweep: Option<CfgRxGainSweep>,
 }
 
 impl CfgSoapySdr {
@@ -62,6 +95,44 @@ pub struct SoapySdrDto {
     pub sample_rate: Option<f64>,
     pub rx_channel: Option<usize>,
     pub tx_channel: Option<usize>,
+
+    pub rx_gain_sweep: Option<RxGainSweepDto>,
+
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+pub struct GainRangeDto {
+    pub from: f64,
+    pub to: f64,
+    pub step: f64,
+
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+pub struct RxGainSweepDto {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub strategy: CfgGainSweepStrategy,
+    pub window_bursts: Option<u32>,
+    pub settling_slots: Option<u32>,
+    #[serde(default)]
+    pub auto_exit: bool,
+
+    pub test_signal_profile: Option<String>,
+    #[serde(default)]
+    pub required_ul_slots: Vec<u8>,
+    pub min_slot_crc_pass_rate: Option<f64>,
+    pub test_device_type: Option<String>,
+    pub test_tx_power_dbm: Option<f64>,
+    pub test_level_dbm: Option<f64>,
+
+    #[serde(default)]
+    pub gains: HashMap<String, GainRangeDto>,
 
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,

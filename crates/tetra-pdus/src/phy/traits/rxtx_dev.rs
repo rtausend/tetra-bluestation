@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tetra_core::TdmaTime;
 use tetra_core::TrainingSequence;
 
@@ -10,6 +12,12 @@ pub enum RxTxDevError {
 #[derive(Debug, Default)]
 pub struct RxBurstBits<'a> {
     pub train_type: TrainingSequence,
+    /// Number of bit errors for the selected training sequence match.
+    pub train_errs: usize,
+    /// Position (in demodulated bits) where the burst starts inside the analyzed slot window.
+    pub burst_pos: usize,
+    /// Burst length in bits.
+    pub burst_len: usize,
     pub bits: &'a [u8],
 }
 
@@ -40,4 +48,9 @@ pub struct TxSlotBits<'a> {
 /// Trait for RX/TX devices that work with full slots.
 pub trait RxTxDev {
     fn rxtx_timeslot(&mut self, tx_slot: &[TxSlotBits]) -> Result<Vec<Option<RxSlotBits<'_>>>, RxTxDevError>;
+
+    /// Internal runtime hook for autonomous RX gain sweeps.
+    fn apply_rx_gain_combo(&mut self, _gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
+        Ok(())
+    }
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use toml::Value;
 
-use crate::bluestation::{CfgSoapySdr, SoapySdrDto};
+use crate::bluestation::{CfgGainRange, CfgRxGainSweep, CfgSoapySdr, SoapySdrDto};
 
 /// The PHY layer backend type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -90,6 +90,33 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
                     })
                 })
                 .collect(),
+            rx_gain_sweep: soapy_dto.rx_gain_sweep.map(|sweep_dto| CfgRxGainSweep {
+                enabled: sweep_dto.enabled,
+                strategy: sweep_dto.strategy,
+                window_bursts: sweep_dto.window_bursts.unwrap_or(500),
+                settling_slots: sweep_dto.settling_slots.unwrap_or(8),
+                auto_exit: sweep_dto.auto_exit,
+                test_signal_profile: sweep_dto.test_signal_profile,
+                required_ul_slots: sweep_dto.required_ul_slots,
+                min_slot_crc_pass_rate: sweep_dto.min_slot_crc_pass_rate,
+                test_device_type: sweep_dto.test_device_type,
+                test_tx_power_dbm: sweep_dto.test_tx_power_dbm,
+                test_level_dbm: sweep_dto.test_level_dbm,
+                gains: sweep_dto
+                    .gains
+                    .into_iter()
+                    .map(|(name, range)| {
+                        (
+                            name.to_lowercase(),
+                            CfgGainRange {
+                                from: range.from,
+                                to: range.to,
+                                step: range.step,
+                            },
+                        )
+                    })
+                    .collect(),
+            }),
         }
     });
 

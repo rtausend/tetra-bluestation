@@ -8,8 +8,9 @@ use tetra_entities::net_control::channel::build_all_control_links;
 use tetra_entities::net_control::{
     CONTROL_HEARTBEAT_INTERVAL, CONTROL_HEARTBEAT_TIMEOUT, CONTROL_PROTOCOL_VERSION, CommandDispatcher, ControlWorker,
 };
+use tetra_entities::phy::components::rx_test_devices::{RxTestBurstMode, build_adapter};
 
-use tetra_config::bluestation::{PhyBackend, SharedConfig, StackConfig, parsing};
+use tetra_config::bluestation::{PhyBackend, SharedConfig, StackConfig, StackState, parsing};
 use tetra_core::{TdmaTime, debug};
 use tetra_entities::MessageRouter;
 use tetra_entities::net_brew::entity::BrewEntity;
@@ -29,6 +30,11 @@ use tetra_entities::{
     sndcp::sndcp_bs::Sndcp,
     umac::umac_bs::UmacBs,
 };
+
+struct RxGainTestMetadata {
+    test_tx_power_dbm: f64,
+    test_level_dbm: f64,
+}
 
 /// Load configuration file
 fn load_config_from_toml(cfg_path: &str) -> StackConfig {
@@ -174,6 +180,52 @@ fn build_bs_stack(cfg: &mut SharedConfig) -> (MessageRouter, Option<TelemetrySou
     (router, tsource, c_d)
 }
 
+fn resolve_rx_gain_test_metadata(args: &Args, stack_cfg: &StackConfig) -> Result<RxGainTestMetadata, String> {
+    let Some(soapy_cfg) = stack_cfg.phy_io.soapysdr.as_ref() else {
+        return Err("rx-gain-test requires phy_io.soapysdr configuration".to_string());
+    };
+
+    let Some(sweep_cfg) = soapy_cfg.rx_gain_sweep.as_ref() else {
+        return Err("rx-gain-test requires phy_io.soapysdr.rx_gain_sweep configuration".to_string());
+    };
+
+    if !sweep_cfg.enabled {
+        return Err("rx-gain-test requires phy_io.soapysdr.rx_gain_sweep.enabled = true".to_string());
+    }
+
+    if sweep_cfg.gains.is_empty() {
+        return Err("rx-gain-test requires at least one configured gain range under phy_io.soapysdr.rx_gain_sweep.gains".to_string());
+    }
+
+    let test_tx_power_dbm = args
+        .test_tx_power_db
+        .or(sweep_cfg.test_tx_power_dbm)
+        .ok_or_else(|| {
+            "Missing test TX power. Provide --test-tx-power-db or set phy_io.soapysdr.rx_gain_sweep.test_tx_power_dbm".to_string()
+        })?;
+
+    let test_level_dbm = args.test_level_db.or(sweep_cfg.test_level_dbm).ok_or_else(|| {
+        "Missing test level. Provide --test-level-db or set phy_io.soapysdr.rx_gain_sweep.test_level_dbm".to_string()
+    })?;
+
+    let adapter = build_adapter(sweep_cfg.test_device_type.as_deref())?;
+    adapter.validate_for_run(sweep_cfg)?;
+    let meta = adapter.metadata(sweep_cfg);
+    let burst_mode = match meta.burst_mode {
+        RxTestBurstMode::Bursted => "bursted",
+        RxTestBurstMode::Continuous => "continuous",
+    };
+    eprintln!(
+        " -> test_device_type={}, operation_profile={}, signal_profile={}, burst_mode={}",
+        meta.test_device_type, meta.operation_profile, meta.signal_profile, burst_mode
+    );
+
+    Ok(RxGainTestMetadata {
+        test_tx_power_dbm,
+        test_level_dbm,
+    })
+}
+
 #[derive(Parser, Debug)]
 #[command(
     author,
@@ -186,6 +238,18 @@ struct Args {
     /// Config file (required)
     #[arg(help = "TOML config with network/cell parameters")]
     config: String,
+
+    /// Start autonomous RX gain test mode.
+    #[arg(long, default_value_t = false)]
+    rx_gain_test: bool,
+
+    /// Optional override for test device transmit power metadata in dBm.
+    #[arg(long)]
+    test_tx_power_db: Option<f64>,
+
+    /// Optional override for test level metadata at DUT input in dBm.
+    #[arg(long)]
+    test_level_db: Option<f64>,
 }
 
 fn main() {
@@ -201,7 +265,23 @@ fn main() {
 
     // Build immutable, cheaply clonable SharedConfig and build the base station stack
     let stack_cfg = load_config_from_toml(&args.config);
-    let mut cfg = SharedConfig::from_parts(stack_cfg, None);
+
+    if args.rx_gain_test {
+        match resolve_rx_gain_test_metadata(&args, &stack_cfg) {
+            Ok(meta) => {
+                eprintln!(" -> RX gain test mode enabled (autonomous run)");
+                eprintln!(" -> test_tx_power_dbm={} dBm, test_level_dbm={} dBm", meta.test_tx_power_dbm, meta.test_level_dbm);
+            }
+            Err(e) => {
+                eprintln!("Invalid rx-gain-test setup: {}", e);
+                std::process::exit(2);
+            }
+        }
+    }
+
+    let mut state = StackState::default();
+    state.rx_gain_test_mode = args.rx_gain_test;
+    let mut cfg = SharedConfig::from_parts(stack_cfg, Some(state));
 
     let _log_guards = debug::setup_logging_default(cfg.config().debug_log.clone());
     let (mut router, tsource, cdispatchers) = build_bs_stack(&mut cfg);
