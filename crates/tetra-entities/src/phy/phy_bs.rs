@@ -52,6 +52,8 @@ struct RxGainSweepRuntime {
     settling_slots: u32,
     settling_remaining: u32,
     window_bursts: u32,
+    progress_log_step_bursts: u32,
+    next_progress_log_bursts: u32,
     measured_bursts: u32,
     expected_slots: u32,
     slot_detected: [u32; 4],
@@ -421,6 +423,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 );
                 runtime.settling_remaining = runtime.settling_slots;
                 runtime.measured_bursts = 0;
+                runtime.next_progress_log_bursts = runtime.progress_log_step_bursts;
                 runtime.expected_slots = 0;
                 runtime.slot_detected = [0; 4];
                 runtime.measured_slots = 0;
@@ -471,6 +474,26 @@ impl<D: RxTxDev> PhyBs<D> {
             runtime.slot_detected[i] = runtime.slot_detected[i].saturating_add(*val);
         }
         runtime.measured_slots = runtime.measured_slots.saturating_add(1);
+
+        if runtime.measured_bursts < runtime.window_bursts
+            && runtime.measured_bursts >= runtime.next_progress_log_bursts
+        {
+            let progress_pct = Self::safe_ratio_u32(runtime.measured_bursts, runtime.window_bursts) * 100.0;
+            tracing::info!(
+                combo_index = runtime.current_idx,
+                counted_bursts = runtime.measured_bursts,
+                target_bursts = runtime.window_bursts,
+                progress_pct,
+                measured_slots = runtime.measured_slots,
+                "rx_gain_sweep_progress"
+            );
+
+            while runtime.next_progress_log_bursts <= runtime.measured_bursts {
+                runtime.next_progress_log_bursts = runtime
+                    .next_progress_log_bursts
+                    .saturating_add(runtime.progress_log_step_bursts.max(1));
+            }
+        }
 
         if runtime.measured_bursts >= runtime.window_bursts {
             tracing::debug!(combo_index = runtime.current_idx, "rx_gain_sweep_window_ready");
@@ -542,6 +565,8 @@ impl<D: RxTxDev> PhyBs<D> {
                             settling_slots: sweep.settling_slots,
                             settling_remaining: 0,
                             window_bursts: sweep.window_bursts,
+                            progress_log_step_bursts: (sweep.window_bursts / 10).max(1),
+                            next_progress_log_bursts: (sweep.window_bursts / 10).max(1),
                             measured_bursts: 0,
                             expected_slots: 0,
                             slot_detected: [0; 4],
