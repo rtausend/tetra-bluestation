@@ -1082,9 +1082,10 @@ impl UmacBs {
             }
         };
 
-        // Handle reservation if present
-        // TODO implement slightly different handling since enum is not the same.
-        unimplemented!();
+        // TODO implement reservation handling for MAC-U-BLCK.
+        // For now, do not abort the whole stack when this optional/rare uplink PDU appears.
+        tracing::warn!("unimplemented: rx_ul_mac_u_blck reservation handling");
+        return;
     }
 
     fn rx_ul_tma_unitdata_req(&mut self, _queue: &mut MessageQueue, message: SapMsg) {
