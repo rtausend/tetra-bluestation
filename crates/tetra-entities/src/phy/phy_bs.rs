@@ -50,7 +50,7 @@ struct RxGainSweepResult {
     gaps_detected: u32,
     /// Gap rate as percentage (gaps / expected_detectable) * 100
     gap_rate: f64,
-    /// Status: STABLE (<3% gaps), UNSTABLE (>=3% gaps)
+    /// Status: STABLE (<5% gaps), UNSTABLE (>=5% gaps)
     stability_status: String,
     /// Duration of measurement window in milliseconds
     duration_ms: u64,
@@ -271,8 +271,8 @@ impl<D: RxTxDev> PhyBs<D> {
         let gaps_detected = expected_detectable.saturating_sub(detected_bursts);
         let gap_rate = gaps_detected as f64 / expected_detectable as f64;
 
-        // Classify as STABLE (<3% gaps) or UNSTABLE (>=3% gaps)
-        let stability_status = if gap_rate >= 0.03 { "UNSTABLE" } else { "STABLE" }.to_string();
+        // Classify as STABLE (<5% gaps) or UNSTABLE (>=5% gaps)
+        let stability_status = if gap_rate >= 0.05 { "UNSTABLE" } else { "STABLE" }.to_string();
 
         (gaps_detected, gap_rate, stability_status)
     }
@@ -339,6 +339,12 @@ impl<D: RxTxDev> PhyBs<D> {
         );
 
         if let Some(writer) = &runtime.export_writer {
+            let detect_rate = if result.expected_detectable > 0 {
+                (result.detected_bursts as f64) / (result.expected_detectable as f64)
+            } else {
+                0.0
+            };
+            
             let row = RxGainWindowExport {
                 timestamp: format!("{}", runtime.run_started_unix),
                 gain_combo: Self::format_gain_combo(&gain_combo),
@@ -349,6 +355,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 expected_slots: result.expected_slots,
                 expected_detectable: result.expected_detectable,
                 detected: result.detected_bursts,
+                detect_rate,
                 decode_attempted: result.decode_attempted,
                 decode_success: result.decode_success,
                 crc_ok: result.crc_ok,
@@ -356,13 +363,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 crc_pass_rate: Self::crc_pass_rate(&result),
                 false_positive_rate: Self::false_positive_rate(&result),
                 slot0_detected: result.slot_detected[0],
-                slot1_detected: result.slot_detected[1],
-                slot2_detected: result.slot_detected[2],
-                slot3_detected: result.slot_detected[3],
                 slot0_crc_pass_rate: slot_rates[0],
-                slot1_crc_pass_rate: slot_rates[1],
-                slot2_crc_pass_rate: slot_rates[2],
-                slot3_crc_pass_rate: slot_rates[3],
                 gaps_detected,
                 gap_rate,
                 stability_status: stability_status.clone(),

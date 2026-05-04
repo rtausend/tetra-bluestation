@@ -14,6 +14,7 @@ pub struct RxGainWindowExport {
     pub expected_slots: u32,
     pub expected_detectable: u32,
     pub detected: u32,
+    pub detect_rate: f64,
     pub decode_attempted: u64,
     pub decode_success: u64,
     pub crc_ok: u64,
@@ -21,13 +22,7 @@ pub struct RxGainWindowExport {
     pub crc_pass_rate: f64,
     pub false_positive_rate: f64,
     pub slot0_detected: u32,
-    pub slot1_detected: u32,
-    pub slot2_detected: u32,
-    pub slot3_detected: u32,
     pub slot0_crc_pass_rate: f64,
-    pub slot1_crc_pass_rate: f64,
-    pub slot2_crc_pass_rate: f64,
-    pub slot3_crc_pass_rate: f64,
     pub gaps_detected: u32,
     pub gap_rate: f64,
     pub stability_status: String,
@@ -113,12 +108,12 @@ impl RxGainExportWriter {
         if !csv_path.exists() {
             Self::append_line(
                 &csv_path,
-                "timestamp,gain_combo,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode,expected_slots,expected_detectable,detected,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,slot0_detected,slot1_detected,slot2_detected,slot3_detected,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms",
+                "timestamp,gain_combo,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode,expected_slots,expected_detectable,detected,detect_rate,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,slot0_detected,slot0_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms",
             )?;
         }
 
         let line = format!(
-            "{},\"{}\",{:.3},{:.3},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{:.4},\"{}\",{}",
+            "{},\"{}\",{:.3},{:.3},{},{},{},{},{},{:.6},{},{},{},{},{:.6},{:.6},{},{:.6},{},{:.4},\"{}\",{}",
             row.timestamp,
             row.gain_combo,
             row.test_level_dbm,
@@ -128,6 +123,7 @@ impl RxGainExportWriter {
             row.expected_slots,
             row.expected_detectable,
             row.detected,
+            row.detect_rate,
             row.decode_attempted,
             row.decode_success,
             row.crc_ok,
@@ -135,13 +131,7 @@ impl RxGainExportWriter {
             row.crc_pass_rate,
             row.false_positive_rate,
             row.slot0_detected,
-            row.slot1_detected,
-            row.slot2_detected,
-            row.slot3_detected,
             row.slot0_crc_pass_rate,
-            row.slot1_crc_pass_rate,
-            row.slot2_crc_pass_rate,
-            row.slot3_crc_pass_rate,
             row.gaps_detected,
             row.gap_rate,
             row.stability_status,
