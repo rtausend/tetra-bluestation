@@ -557,39 +557,39 @@ The gap-detection system validates measurement completeness by identifying missi
 ### 11.2 Terminology
 
 - **Timeslot**: A TDMA timeslot in the TETRA frame structure. TETRA uses timeslots numbered 1-4 per frame, 1-18 frames per multiframe.
-- **Expected slots**: The target number of bursts expected during a measurement window (configured as `window_bursts`).
+- **Expected slots**: Number of RX/TX measurement ticks observed in the measurement window.
+- **Expected detectable**: Number of bursts that should be detectable for the configured test signal mode. For T1 mode this is approximated as `expected_slots / 4`.
 - **Detected bursts**: Actual bursts received and processed by the PHY layer during the measurement window.
-- **Gap**: A missing burst in the continuous TDMA sequence. Consecutive detected timeslots should form an unbroken sequence; any deviation indicates a gap.
-- **Gap rate**: `(gaps_detected / expected_slots) * 100` percentage, indicating measurement quality.
+- **Gap**: A missing detectable burst relative to `expected_detectable`.
+- **Gap rate**: `(gaps_detected / expected_detectable) * 100` percentage, indicating measurement quality.
 - **Stability status**: 
   - `STABLE`: gap_rate < 3% (acceptable measurement quality)
   - `UNSTABLE`: gap_rate ≥ 3% (potential RF issues or receiver problems)
 
 ### 11.3 Gap Detection Algorithm
 
-1. **Collect detected timeslots**: During the measurement window, every received burst (full slot or subslot) records its TDMA timestamp (`multiframe.frame.timeslot.subslot`).
-2. **Sort timeslots**: Sort all detected timestamps by multiframe, then frame, then timeslot.
-3. **Detect gaps**: Iterate through consecutive timeslots. A gap exists if:
-   - Same frame: timeslot advances by more than 1 (e.g., slot 2 → slot 4).
-   - Frame boundary: current is not slot 4 or next is not slot 1.
-   - Frame discontinuity: frames differ by more than 1.
-4. **Calculate metrics**:
-   - `gaps_detected = count of identified gaps`
-   - `gap_rate = gaps_detected / expected_slots`
+1. **Count measurement ticks**: During the measurement window, count RX/TX ticks as `expected_slots`.
+2. **Derive detectable opportunities**: Compute `expected_detectable` from signal mode:
+  - T1 mode: `expected_detectable = ceil(expected_slots / 4)`
+  - Non-T1 modes: `expected_detectable = expected_slots`
+3. **Calculate metrics**:
+  - `gaps_detected = max(expected_detectable - detected_bursts, 0)`
+  - `gap_rate = gaps_detected / expected_detectable`
    - `stability_status = STABLE if gap_rate < 0.03, else UNSTABLE`
 
 ### 11.4 CSV Export Format
 
-The window and summary CSV exports include three new columns:
+The window and summary CSV exports include the following columns for stability assessment:
 
+- `expected_detectable` (integer): Estimated burst opportunities for the configured signal mode.
 - `gaps_detected` (integer): Number of gaps found in the measurement window.
-- `gap_rate` (float, 0.0-1.0): Gap rate as a fraction of expected slots.
+- `gap_rate` (float, 0.0-1.0): Gap rate as a fraction of expected detectable bursts.
 - `stability_status` (string): "STABLE" or "UNSTABLE" classification.
 
 Example window export row:
 ```
-timestamp,...,gaps_detected,gap_rate,stability_status
-1234567890,...,2,0.0400,"UNSTABLE"
+timestamp,...,expected_slots,expected_detectable,...,gaps_detected,gap_rate,stability_status
+1234567890,...,2110,528,...,28,0.0530,"UNSTABLE"
 ```
 
 ### 11.5 Interpretation Guide

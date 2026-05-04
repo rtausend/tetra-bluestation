@@ -12,6 +12,7 @@ pub struct RxGainWindowExport {
     pub test_device_type: String,
     pub test_signal_mode: String,
     pub expected_slots: u32,
+    pub expected_detectable: u32,
     pub detected: u32,
     pub decode_attempted: u64,
     pub decode_success: u64,
@@ -40,6 +41,7 @@ pub struct RxGainSummaryExport {
     pub gain_combo: String,
     pub detected: u32,
     pub expected_slots: u32,
+    pub expected_detectable: u32,
     pub detect_rate: f64,
     pub decode_attempted: u64,
     pub decode_success: u64,
@@ -111,12 +113,12 @@ impl RxGainExportWriter {
         if !csv_path.exists() {
             Self::append_line(
                 &csv_path,
-                "timestamp,gain_combo,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode,expected_slots,detected,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,slot0_detected,slot1_detected,slot2_detected,slot3_detected,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms",
+                "timestamp,gain_combo,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode,expected_slots,expected_detectable,detected,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,slot0_detected,slot1_detected,slot2_detected,slot3_detected,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms",
             )?;
         }
 
         let line = format!(
-            "{},\"{}\",{:.3},{:.3},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{:.4},\"{}\",{}",
+            "{},\"{}\",{:.3},{:.3},{},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{:.4},\"{}\",{}",
             row.timestamp,
             row.gain_combo,
             row.test_level_dbm,
@@ -124,6 +126,7 @@ impl RxGainExportWriter {
             row.test_device_type,
             row.test_signal_mode,
             row.expected_slots,
+            row.expected_detectable,
             row.detected,
             row.decode_attempted,
             row.decode_success,
@@ -155,18 +158,19 @@ impl RxGainExportWriter {
 
         let mut cf = File::create(self.summary_csv_path()).map_err(|e| format!("Failed to create summary CSV file: {}", e))?;
         cf.write_all(
-            b"timestamp,rank,gain_combo,detected,expected_slots,detect_rate,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,passes_required_slots,passes_slot_crc_threshold,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode\n",
+            b"timestamp,rank,gain_combo,detected,expected_slots,expected_detectable,detect_rate,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,passes_required_slots,passes_slot_crc_threshold,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode\n",
         )
         .map_err(|e| format!("Failed to write summary CSV header: {}", e))?;
 
         for row in rows {
             let line = format!(
-                "{},\"{}\",{},{},{},{:.6},{},{},{},{},{:.6},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{},{:.4},\"{}\",{:.3},{:.3},{},{}\n",
+                "{},\"{}\",{},{},{},{},{:.6},{},{},{},{},{:.6},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{},{:.4},\"{}\",{},{:.3},{:.3},{},{}\n",
                 row.timestamp,
                 row.rank,
                 row.gain_combo,
                 row.detected,
                 row.expected_slots,
+                row.expected_detectable,
                 row.detect_rate,
                 row.decode_attempted,
                 row.decode_success,
@@ -183,6 +187,7 @@ impl RxGainExportWriter {
                 row.gaps_detected,
                 row.gap_rate,
                 row.stability_status,
+                row.duration_ms,
                 row.test_level_dbm,
                 row.test_tx_power_dbm,
                 row.test_device_type,

@@ -33,9 +33,11 @@ enum RxGainSweepPhase {
 struct RxGainSweepResult {
     gain_combo: HashMap<String, f64>,
     detected_bursts: u32,
-    /// Note: Named 'expected_slots' for legacy compatibility, but actually counts rxtx_timeslot ticks
-    /// (i.e., physical RX/TX operations), not TDMA slots. Detection rate = detected_bursts / expected_slots.
+    /// Counts rxtx_timeslot ticks (physical RX/TX operations).
     expected_slots: u32,
+    /// Expected detectable bursts for the configured signal mode.
+    /// For T1 mode this is approximately expected_slots / 4.
+    expected_detectable: u32,
     slot_detected: [u32; 4],
     measured_slots: u32,
     decode_attempted: u64,
@@ -44,9 +46,9 @@ struct RxGainSweepResult {
     false_positive: u64,
     slot_attempted: [u64; 4],
     slot_crc_ok: [u64; 4],
-    /// Number of gaps (missing slots) detected during measurement window
+    /// Number of missing detectable bursts during measurement window.
     gaps_detected: u32,
-    /// Gap rate as percentage (gaps / expected_slots) * 100
+    /// Gap rate as percentage (gaps / expected_detectable) * 100
     gap_rate: f64,
     /// Status: STABLE (<3% gaps), UNSTABLE (>=3% gaps)
     stability_status: String,
@@ -65,7 +67,7 @@ struct RxGainSweepRuntime {
     progress_log_step_bursts: u32,
     next_progress_log_bursts: u32,
     measured_bursts: u32,
-    /// Note: counts rxtx_timeslot ticks, not TDMA slots (see RxGainSweepResult.expected_slots)
+    /// Counts rxtx_timeslot ticks, not TDMA slots (see RxGainSweepResult.expected_slots)
     expected_slots: u32,
     slot_detected: [u32; 4],
     measured_slots: u32,
@@ -221,6 +223,20 @@ impl<D: RxTxDev> PhyBs<D> {
         Self::safe_ratio_u64(result.false_positive, result.decode_attempted)
     }
 
+    fn expected_detectable_bursts(signal_mode: &str, expected_ticks: u32) -> u32 {
+        if expected_ticks == 0 {
+            return 0;
+        }
+
+        // Stabilock T1 mode emits bursts effectively in one UL slot per frame.
+        // A measurement tick iterates through all 4 slots, so detectable opportunities are ~ticks/4.
+        if signal_mode.to_ascii_lowercase().contains("t1") {
+            (expected_ticks.saturating_add(3)) / 4
+        } else {
+            expected_ticks
+        }
+    }
+
     fn rank_rx_gain_result(runtime: &RxGainSweepRuntime, result: &RxGainSweepResult) -> (u8, f64, f64, u32) {
         let passes_required = Self::passes_required_slots(runtime, result);
         let passes_threshold = Self::passes_slot_crc_threshold(runtime, result);
@@ -245,26 +261,15 @@ impl<D: RxTxDev> PhyBs<D> {
             .then_with(|| b_detected.cmp(&a_detected))
     }
 
-    /// Calculate gap-detection metrics from detected timeslots
+    /// Calculate gap-detection metrics from detected bursts and expected detectable bursts.
     /// Returns: (gaps_detected, gap_rate, stability_status)
-    /// gaps_detected = expected_slots - detected_bursts
-    fn calculate_gap_metrics(detected_slot_times: &[TdmaTime], expected_slots: u32) -> (u32, f64, String) {
-        if expected_slots == 0 {
+    fn calculate_gap_metrics(detected_bursts: u32, expected_detectable: u32) -> (u32, f64, String) {
+        if expected_detectable == 0 {
             return (0, 0.0, "STABLE".to_string());
         }
 
-        // Count unique detected bursts (each entry is one detected burst)
-        let detected_bursts = detected_slot_times.len() as u32;
-        
-        // Calculate gaps: missing slots = expected - detected
-        let gaps_detected = expected_slots.saturating_sub(detected_bursts);
-        
-        // Gap rate: fraction of missing slots relative to expected
-        let gap_rate = if expected_slots > 0 {
-            gaps_detected as f64 / expected_slots as f64
-        } else {
-            0.0
-        };
+        let gaps_detected = expected_detectable.saturating_sub(detected_bursts);
+        let gap_rate = gaps_detected as f64 / expected_detectable as f64;
 
         // Classify as STABLE (<3% gaps) or UNSTABLE (>=3% gaps)
         let stability_status = if gap_rate >= 0.03 { "UNSTABLE" } else { "STABLE" }.to_string();
@@ -277,8 +282,12 @@ impl<D: RxTxDev> PhyBs<D> {
         let decode_delta = latest_decode_counters.diff_from(&runtime.window_decode_baseline);
         runtime.window_decode_baseline = latest_decode_counters.clone();
 
+        let expected_detectable =
+            Self::expected_detectable_bursts(&runtime.test_signal_mode, runtime.expected_slots);
+
         // Calculate gap-detection metrics
-        let (gaps_detected, gap_rate, stability_status) = Self::calculate_gap_metrics(&runtime.detected_slot_times, runtime.expected_slots);
+        let (gaps_detected, gap_rate, stability_status) =
+            Self::calculate_gap_metrics(runtime.measured_bursts, expected_detectable);
 
         // Calculate measurement window duration in milliseconds
         let now_unix = std::time::SystemTime::now()
@@ -291,6 +300,7 @@ impl<D: RxTxDev> PhyBs<D> {
             gain_combo: gain_combo.clone(),
             detected_bursts: runtime.measured_bursts,
             expected_slots: runtime.expected_slots,
+            expected_detectable,
             slot_detected: runtime.slot_detected,
             measured_slots: runtime.measured_slots,
             decode_attempted: decode_delta.decode_attempted,
@@ -309,7 +319,8 @@ impl<D: RxTxDev> PhyBs<D> {
         tracing::info!(
             combo_index = runtime.current_idx,
             detected_bursts = result.detected_bursts,
-            expected_slots = result.expected_slots,
+            expected_ticks = result.expected_slots,
+            expected_detectable = result.expected_detectable,
             decode_attempted = result.decode_attempted,
             decode_success = result.decode_success,
             crc_ok = result.crc_ok,
@@ -336,6 +347,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 test_device_type: runtime.test_device_type.clone(),
                 test_signal_mode: runtime.test_signal_mode.clone(),
                 expected_slots: result.expected_slots,
+                expected_detectable: result.expected_detectable,
                 detected: result.detected_bursts,
                 decode_attempted: result.decode_attempted,
                 decode_success: result.decode_success,
@@ -403,7 +415,8 @@ impl<D: RxTxDev> PhyBs<D> {
             tracing::info!(
                 rank = i + 1,
                 detected_bursts = result.detected_bursts,
-                expected_slots = result.expected_slots,
+                expected_ticks = result.expected_slots,
+                expected_detectable = result.expected_detectable,
                 measured_slots = result.measured_slots,
                 decode_attempted = result.decode_attempted,
                 decode_success = result.decode_success,
@@ -428,7 +441,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 .iter()
                 .enumerate()
                 .map(|(idx, row)| {
-                    let detect_rate = Self::safe_ratio_u32(row.detected_bursts, row.expected_slots);
+                    let detect_rate = Self::safe_ratio_u32(row.detected_bursts, row.expected_detectable);
                     let slot_rates = Self::slot_crc_rates(row);
 
                     RxGainSummaryExport {
@@ -437,6 +450,7 @@ impl<D: RxTxDev> PhyBs<D> {
                         gain_combo: Self::format_gain_combo(&row.gain_combo),
                         detected: row.detected_bursts,
                         expected_slots: row.expected_slots,
+                        expected_detectable: row.expected_detectable,
                         detect_rate,
                         decode_attempted: row.decode_attempted,
                         decode_success: row.decode_success,
