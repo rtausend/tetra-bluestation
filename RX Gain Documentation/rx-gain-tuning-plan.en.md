@@ -541,3 +541,91 @@ This turns the current single log event
 - `rx_tpsap_prim got NormalTrainSeq1 in fullslot`
 
 into a reliable, quantitative decision basis for operation.
+
+## 11. Gap-Detection System for Measurement Stability
+
+### 11.1 Purpose
+
+The gap-detection system validates measurement completeness by identifying missing timeslots during a measurement window. It provides an objective metric to assess RF stability and signal reception quality for each gain combination.
+
+**Problem it solves:**
+
+- High gap rates indicate RF instability, reception dropout, or excessive burst collisions.
+- Without gap-detection, a low CRC rate could be incorrectly attributed to gain settings instead of measurement quality issues.
+- Gap-rate provides an independent stability assessment orthogonal to CRC-based ranking.
+
+### 11.2 Terminology
+
+- **Timeslot**: A TDMA timeslot in the TETRA frame structure. TETRA uses timeslots numbered 1-4 per frame, 1-18 frames per multiframe.
+- **Expected slots**: The target number of bursts expected during a measurement window (configured as `window_bursts`).
+- **Detected bursts**: Actual bursts received and processed by the PHY layer during the measurement window.
+- **Gap**: A missing burst in the continuous TDMA sequence. Consecutive detected timeslots should form an unbroken sequence; any deviation indicates a gap.
+- **Gap rate**: `(gaps_detected / expected_slots) * 100` percentage, indicating measurement quality.
+- **Stability status**: 
+  - `STABLE`: gap_rate < 3% (acceptable measurement quality)
+  - `UNSTABLE`: gap_rate ≥ 3% (potential RF issues or receiver problems)
+
+### 11.3 Gap Detection Algorithm
+
+1. **Collect detected timeslots**: During the measurement window, every received burst (full slot or subslot) records its TDMA timestamp (`multiframe.frame.timeslot.subslot`).
+2. **Sort timeslots**: Sort all detected timestamps by multiframe, then frame, then timeslot.
+3. **Detect gaps**: Iterate through consecutive timeslots. A gap exists if:
+   - Same frame: timeslot advances by more than 1 (e.g., slot 2 → slot 4).
+   - Frame boundary: current is not slot 4 or next is not slot 1.
+   - Frame discontinuity: frames differ by more than 1.
+4. **Calculate metrics**:
+   - `gaps_detected = count of identified gaps`
+   - `gap_rate = gaps_detected / expected_slots`
+   - `stability_status = STABLE if gap_rate < 0.03, else UNSTABLE`
+
+### 11.4 CSV Export Format
+
+The window and summary CSV exports include three new columns:
+
+- `gaps_detected` (integer): Number of gaps found in the measurement window.
+- `gap_rate` (float, 0.0-1.0): Gap rate as a fraction of expected slots.
+- `stability_status` (string): "STABLE" or "UNSTABLE" classification.
+
+Example window export row:
+```
+timestamp,...,gaps_detected,gap_rate,stability_status
+1234567890,...,2,0.0400,"UNSTABLE"
+```
+
+### 11.5 Interpretation Guide
+
+**When analyzing RX gain sweep results:**
+
+- **All combos STABLE (gap_rate < 3%)**:
+  - Measurement is reliable; ranking by CRC alone is valid.
+  - Choose top-ranked combo by CRC performance.
+
+- **Some combos UNSTABLE (gap_rate ≥ 3%)**:
+  - These combos experienced RF dropout or collision issues.
+  - Avoid selecting unstable combos, even if CRC rates appear good (likely due to incomplete measurement).
+  - Prefer a stable combo with slightly lower CRC if necessary.
+
+- **All combos UNSTABLE**:
+  - Indicates systematic issue: antenna problem, TX/RX interference, or test signal too weak.
+  - Recommendations:
+    - Verify test signal level (`test_level_dbm`).
+    - Check antenna connections and cable quality.
+    - Verify no interference on test frequency.
+    - Increase settling time (`settling_slots` config) to allow PLL stabilization.
+    - Consider signal path checks (RF probe measurements).
+
+### 11.6 Logging
+
+During measurement finalization, gap-detection results are logged:
+```
+rx_gain_sweep_measure_done gaps_detected=2 gap_rate=4.00% stability=UNSTABLE
+```
+
+This allows operators to quickly identify problematic gain combinations in real-time logs.
+
+### 11.7 Future Extensions (Tier 2+)
+
+- **Temporal clustering**: Identify patterns in gap distribution (burst-starvation at specific times).
+- **Adaptive burst increase**: Automatically increase window bursts if gaps exceed threshold.
+- **Per-slot gap analysis**: Track gaps per timeslot (1-4) to identify slot-specific issues.
+- **Ranking penalty**: Apply gap_rate penalty to score to prefer stable combos in borderline CRC cases.

@@ -42,6 +42,12 @@ struct RxGainSweepResult {
     false_positive: u64,
     slot_attempted: [u64; 4],
     slot_crc_ok: [u64; 4],
+    /// Number of gaps (missing slots) detected during measurement window
+    gaps_detected: u32,
+    /// Gap rate as percentage (gaps / expected_slots) * 100
+    gap_rate: f64,
+    /// Status: STABLE (<3% gaps), UNSTABLE (>=3% gaps)
+    stability_status: String,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +75,8 @@ struct RxGainSweepRuntime {
     export_writer: Option<RxGainExportWriter>,
     run_started_unix: u64,
     results: Vec<RxGainSweepResult>,
+    /// Track detected slot times for gap analysis
+    detected_slot_times: Vec<TdmaTime>,
 }
 
 pub struct PhyBs<D: RxTxDev> {
@@ -230,10 +238,75 @@ impl<D: RxTxDev> PhyBs<D> {
             .then_with(|| b_detected.cmp(&a_detected))
     }
 
+    /// Calculate gap-detection metrics from detected timeslots
+    /// Returns: (gaps_detected, gap_rate, stability_status)
+    fn calculate_gap_metrics(detected_slot_times: &[TdmaTime], expected_slots: u32) -> (u32, f64, String) {
+        if expected_slots == 0 {
+            return (0, 0.0, "STABLE".to_string());
+        }
+
+        if detected_slot_times.is_empty() {
+            // No bursts detected = 100% gap rate
+            let gap_rate = 1.0;
+            let status = if gap_rate >= 0.03 { "UNSTABLE" } else { "STABLE" }.to_string();
+            return (expected_slots, gap_rate, status);
+        }
+
+        // Sort detected timeslots by frame and timeslot
+        let mut sorted_times = detected_slot_times.to_vec();
+        sorted_times.sort_by(|a, b| {
+            // Sort by multiframe first, then frame, then timeslot
+            match a.m.cmp(&b.m) {
+                Ordering::Equal => match a.f.cmp(&b.f) {
+                    Ordering::Equal => a.t.cmp(&b.t),
+                    other => other,
+                },
+                other => other,
+            }
+        });
+
+        // Detect gaps: consecutive timeslots should differ by 1 in the timeslot field
+        let mut gaps_found = 0u32;
+        for window in sorted_times.windows(2) {
+            let curr = &window[0];
+            let next = &window[1];
+
+            // Check if it's a gap (non-consecutive timeslots)
+            // Gap exists if: same frame and timeslot differs by more than 1, OR different frames
+            if curr.m == next.m {
+                let expected_next_slot = if curr.t < 4 { curr.t + 1 } else { 1 };
+                if next.t != expected_next_slot {
+                    gaps_found = gaps_found.saturating_add(1);
+                }
+            } else if next.m == curr.m + 1 {
+                // Frame boundary: curr should be slot 4, next should be slot 1
+                if curr.t != 4 || next.t != 1 {
+                    gaps_found = gaps_found.saturating_add(1);
+                }
+            } else {
+                // Non-consecutive frames = gap
+                gaps_found = gaps_found.saturating_add(1);
+            }
+        }
+
+        let gap_rate = if expected_slots > 0 {
+            gaps_found as f64 / expected_slots as f64
+        } else {
+            0.0
+        };
+
+        let stability_status = if gap_rate >= 0.03 { "UNSTABLE" } else { "STABLE" }.to_string();
+
+        (gaps_found, gap_rate, stability_status)
+    }
+
     fn finalize_current_combo(runtime: &mut RxGainSweepRuntime, latest_decode_counters: &RxGainDecodeCounters) {
         let gain_combo = runtime.combos[runtime.current_idx].clone();
         let decode_delta = latest_decode_counters.diff_from(&runtime.window_decode_baseline);
         runtime.window_decode_baseline = latest_decode_counters.clone();
+
+        // Calculate gap-detection metrics
+        let (gaps_detected, gap_rate, stability_status) = Self::calculate_gap_metrics(&runtime.detected_slot_times, runtime.expected_slots);
 
         let result = RxGainSweepResult {
             gain_combo: gain_combo.clone(),
@@ -247,6 +320,9 @@ impl<D: RxTxDev> PhyBs<D> {
             false_positive: decode_delta.false_positive,
             slot_attempted: decode_delta.slot_attempted,
             slot_crc_ok: decode_delta.slot_crc_ok,
+            gaps_detected,
+            gap_rate,
+            stability_status: stability_status.clone(),
         };
 
         let slot_rates = Self::slot_crc_rates(&result);
@@ -265,6 +341,9 @@ impl<D: RxTxDev> PhyBs<D> {
             slot2_crc_pass_rate = slot_rates[2],
             slot3_crc_pass_rate = slot_rates[3],
             gain_combo = %Self::format_gain_combo(&gain_combo),
+            gaps_detected = gaps_detected,
+            gap_rate = format!("{:.2}%", gap_rate * 100.0),
+            stability = %stability_status,
             "rx_gain_sweep_measure_done"
         );
 
@@ -292,6 +371,9 @@ impl<D: RxTxDev> PhyBs<D> {
                 slot1_crc_pass_rate: slot_rates[1],
                 slot2_crc_pass_rate: slot_rates[2],
                 slot3_crc_pass_rate: slot_rates[3],
+                gaps_detected,
+                gap_rate,
+                stability_status: stability_status.clone(),
             };
 
             if let Err(err) = writer.append_window(&row) {
@@ -387,6 +469,9 @@ impl<D: RxTxDev> PhyBs<D> {
                         slot1_crc_pass_rate: slot_rates[1],
                         slot2_crc_pass_rate: slot_rates[2],
                         slot3_crc_pass_rate: slot_rates[3],
+                        gaps_detected: row.gaps_detected,
+                        gap_rate: row.gap_rate,
+                        stability_status: row.stability_status.clone(),
                         test_level_dbm: runtime.test_level_dbm,
                         test_tx_power_dbm: runtime.test_tx_power_dbm,
                         test_device_type: runtime.test_device_type.clone(),
@@ -427,6 +512,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 runtime.expected_slots = 0;
                 runtime.slot_detected = [0; 4];
                 runtime.measured_slots = 0;
+                runtime.detected_slot_times.clear();
                 runtime.window_decode_baseline = config.state_read().rx_gain_decode_counters.clone();
                 runtime.phase = RxGainSweepPhase::Settling;
             }
@@ -605,6 +691,7 @@ impl<D: RxTxDev> PhyBs<D> {
                             export_writer,
                             run_started_unix,
                             results: Vec::new(),
+                            detected_slot_times: Vec::new(),
                         })
                     })
             } else {
@@ -794,6 +881,10 @@ impl<D: RxTxDev> PhyBs<D> {
                 if rx_slot.slot.train_type != TrainingSequence::NotFound {
                     detected_bursts = detected_bursts.saturating_add(1);
                     detected_per_slot[ts_idx] = detected_per_slot[ts_idx].saturating_add(1);
+                    // Track detected timeslot for gap analysis
+                    if let Some(runtime) = &mut self.rx_gain_sweep {
+                        runtime.detected_slot_times.push(rx_slot.time);
+                    }
                     Self::log_rx_burst(self.dltime, "fullslot", &rx_slot.slot);
 
                     if let Some(ul_rx_sender) = &self.ul_rx_sender {
@@ -807,6 +898,10 @@ impl<D: RxTxDev> PhyBs<D> {
                 if rx_slot.subslot1.train_type != TrainingSequence::NotFound {
                     detected_bursts = detected_bursts.saturating_add(1);
                     detected_per_slot[ts_idx] = detected_per_slot[ts_idx].saturating_add(1);
+                    // Track detected timeslot for gap analysis
+                    if let Some(runtime) = &mut self.rx_gain_sweep {
+                        runtime.detected_slot_times.push(rx_slot.time);
+                    }
                     Self::log_rx_burst(self.dltime, "subslot1", &rx_slot.subslot1);
                     if slot_sent {
                         tracing::warn!("Sending same burst twice to LMAC");
@@ -822,6 +917,10 @@ impl<D: RxTxDev> PhyBs<D> {
                 if rx_slot.subslot2.train_type != TrainingSequence::NotFound {
                     detected_bursts = detected_bursts.saturating_add(1);
                     detected_per_slot[ts_idx] = detected_per_slot[ts_idx].saturating_add(1);
+                    // Track detected timeslot for gap analysis
+                    if let Some(runtime) = &mut self.rx_gain_sweep {
+                        runtime.detected_slot_times.push(rx_slot.time);
+                    }
                     Self::log_rx_burst(self.dltime, "subslot2", &rx_slot.subslot2);
                     if slot_sent {
                         tracing::warn!("Sending same burst twice to LMAC");
