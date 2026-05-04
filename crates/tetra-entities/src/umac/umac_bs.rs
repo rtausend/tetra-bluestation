@@ -71,6 +71,22 @@ struct PendingStch {
 }
 
 impl UmacBs {
+    fn clamp_pdu_window_or_drop(prim: &mut tetra_saps::tmv::TmvUnitdataInd, pdu_len_bits: usize, ctx: &str) -> bool {
+        let target_end = prim.pdu.get_raw_start().saturating_add(pdu_len_bits);
+        let raw_pos = prim.pdu.get_raw_pos();
+        if target_end < raw_pos {
+            tracing::warn!(
+                "{}: invalid PDU window target_end={} before raw_pos={}, dropping PDU",
+                ctx,
+                target_end,
+                raw_pos
+            );
+            return false;
+        }
+        prim.pdu.set_raw_end(target_end);
+        true
+    }
+
     pub fn new(config: SharedConfig) -> Self {
         let c = config.config();
         let scrambling_code = scrambler::tetra_scramb_get_init(c.net.mcc, c.net.mnc, c.cell.colour_code);
@@ -504,7 +520,9 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
+        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_data") {
+            return;
+        }
         tracing::trace!(
             "rx_mac_data: pdu: {} sdu: {} fb: {}: {}",
             pdu_len_bits,
@@ -593,7 +611,13 @@ impl UmacBs {
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
             panic!()
         };
-        assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
+        if prim.pdu.get_pos() != 0 {
+            tracing::warn!(
+                "rx_mac_access called with non-zero bit position {}; rewinding to 0",
+                prim.pdu.get_pos()
+            );
+            prim.pdu.seek(0);
+        }
 
         let pdu = match MacAccess::from_bitbuf(&mut prim.pdu) {
             Ok(pdu) => {
@@ -613,7 +637,8 @@ impl UmacBs {
         } else if let Some(addr) = pdu.addr {
             addr
         } else {
-            panic!()
+            tracing::warn!("rx_mac_access: missing address without event label; dropping PDU");
+            return;
         };
 
         // Compute len and extract flags
@@ -650,7 +675,9 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
+        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_access") {
+            return;
+        }
         tracing::trace!(
             "rx_mac_access: pdu: {} sdu: {} fb: {}: {}",
             pdu_len_bits,
@@ -748,7 +775,13 @@ impl UmacBs {
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
             panic!()
         };
-        assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
+        if prim.pdu.get_pos() != 0 {
+            tracing::warn!(
+                "rx_mac_frag_ul called with non-zero bit position {}; rewinding to 0",
+                prim.pdu.get_pos()
+            );
+            prim.pdu.seek(0);
+        }
 
         // Parse header and optional ChanAlloc
         let pdu = match MacFragUl::from_bitbuf(&mut prim.pdu) {
@@ -772,7 +805,9 @@ impl UmacBs {
             }
         };
         pdu_len_bits -= num_fill_bits;
-        prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
+        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_frag_ul") {
+            return;
+        }
         tracing::debug!("rx_mac_frag_ul: pdu_len_bits: {} fill_bits: {}", pdu_len_bits, num_fill_bits);
 
         // Get slot owner from schedule
@@ -797,7 +832,13 @@ impl UmacBs {
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
             panic!()
         };
-        assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
+        if prim.pdu.get_pos() != 0 {
+            tracing::warn!(
+                "rx_mac_end_ul called with non-zero bit position {}; rewinding to 0",
+                prim.pdu.get_pos()
+            );
+            prim.pdu.seek(0);
+        }
 
         // Parse header and optional ChanAlloc
         let pdu = match MacEndUl::from_bitbuf(&mut prim.pdu) {
@@ -833,7 +874,9 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
+        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_end_ul") {
+            return;
+        }
         tracing::trace!(
             "rx_mac_end_ul: pdu: {} sdu: {} fb: {}: {}",
             pdu_len_bits,
@@ -850,7 +893,8 @@ impl UmacBs {
             return;
         };
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
-            unimplemented!("rx_mac_end_ul: Encryption not supported");
+            tracing::warn!("rx_mac_end_ul: Encryption not supported");
+            return;
         }
 
         // Insert last fragment and retrieve finalized block
@@ -905,7 +949,13 @@ impl UmacBs {
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
             panic!()
         };
-        assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
+        if prim.pdu.get_pos() != 0 {
+            tracing::warn!(
+                "rx_mac_end_hu called with non-zero bit position {}; rewinding to 0",
+                prim.pdu.get_pos()
+            );
+            prim.pdu.seek(0);
+        }
 
         // Parse header and optional ChanAlloc
         let pdu = match MacEndHu::from_bitbuf(&mut prim.pdu) {
@@ -947,7 +997,9 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
+        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_end_hu") {
+            return;
+        }
 
         // set to trace
         tracing::trace!(
@@ -966,7 +1018,8 @@ impl UmacBs {
             return;
         };
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
-            unimplemented!("rx_mac_end_hu: Encryption not supported");
+            tracing::warn!("rx_mac_end_hu: Encryption not supported");
+            return;
         }
 
         // Insert last fragment and retrieve finalized block
