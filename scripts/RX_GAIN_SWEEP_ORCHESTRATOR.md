@@ -8,8 +8,10 @@ Instead of internal per-combo device restarts (which can cause state issues), th
 1. Generate all gain combinations
 2. Call `bluestation-bs` once per combo with `--rx-gain-test-single-combo "lna=X pga=Y"`
 3. Each run measures **one combo only**, then **auto-exits**
-4. Wait 1 second between combos for driver recovery
+4. Wait (configurable, default 0.5s) between combos for driver recovery
 5. Results accumulate in the output CSV
+
+**Timing Control**: The orchestrator script fully controls the delay between combos via the `--delay` parameter. The Rust program does not add any additional wait time - it immediately reinitializes the device after shutdown.
 
 ## Usage: Python Script (Recommended)
 
@@ -140,6 +142,8 @@ run_20250101_120000,2025-01-01T12:00:23Z,1,24.0,2.0,95.1,1.8,99.2,19200,STABLE
 ✅ Better isolation if device acts up on one combo  
 ✅ Can easily pause/resume sweep by manually running combos  
 ✅ Results accumulate automatically in single CSV  
+✅ **Fully configurable delay via `--delay` parameter** (0.5s default, adjust as needed)  
+✅ No need to recompile for different timing configurations  
 
 ## Example: Quick Test with 3 Combos
 
