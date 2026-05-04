@@ -1,0 +1,10 @@
+[package]
+name = "soapy-gain-setter"
+version = "0.5.9"
+edition = "2021"
+
+[dependencies]
+soapysdr = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
