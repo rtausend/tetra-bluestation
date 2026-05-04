@@ -105,7 +105,10 @@ impl ReservationRequirement {
     /// Returns 99 when over 69 subslots are required
     pub fn to_req_slotcount(&self) -> usize {
         match self {
-            ReservationRequirement::Req1Subslot => 0,
+            ReservationRequirement::Req1Subslot => {
+                unimplemented!();
+                // 0
+            }
             ReservationRequirement::Req1Slot => 1,
             ReservationRequirement::Req2Slots => 2,
             ReservationRequirement::Req3Slots => 3,
@@ -120,7 +123,10 @@ impl ReservationRequirement {
             ReservationRequirement::Req34Slots => 34,
             ReservationRequirement::Req51Slots => 51,
             ReservationRequirement::Req68Slots => 68,
-            ReservationRequirement::ReqOver68 => 99,
+            ReservationRequirement::ReqOver68 => {
+                unimplemented!();
+                // 99
+            }
         }
     }
 }

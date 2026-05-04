@@ -8,6 +8,7 @@ use tetra_pdus::mle::fields::bs_service_details::BsServiceDetails;
 use tetra_pdus::mle::pdus::d_mle_sync::DMleSync;
 use tetra_pdus::mle::pdus::d_mle_sysinfo::DMleSysinfo;
 use tetra_pdus::umac::enums::mac_pdu_type::MacPduType;
+use tetra_pdus::umac::enums::reservation_requirement::ReservationRequirement;
 use tetra_pdus::umac::enums::sysinfo_opt_field_flag::SysinfoOptFieldFlag;
 use tetra_pdus::umac::fields::channel_allocation::ChanAllocElement;
 use tetra_pdus::umac::fields::sysinfo_default_def_for_access_code_a::SysinfoDefaultDefForAccessCodeA;
@@ -71,6 +72,28 @@ struct PendingStch {
 }
 
 impl UmacBs {
+    fn is_rx_gain_test_mode(&self) -> bool {
+        self.config.state_read().rx_gain_test_mode
+    }
+
+    fn ul_process_cap_req_maybe_test_safe(
+        &mut self,
+        timeslot: u8,
+        addr: TetraAddress,
+        res_req: &ReservationRequirement,
+    ) -> Option<tetra_pdus::umac::fields::basic_slotgrant::BasicSlotgrant> {
+        if self.is_rx_gain_test_mode() && *res_req == ReservationRequirement::ReqOver68 {
+            tracing::warn!(
+                "rx_gain_test_mode: ignoring unsupported reservation {:?} for addr {}",
+                res_req,
+                addr
+            );
+            return None;
+        }
+
+        self.channel_scheduler.ul_process_cap_req(timeslot, addr, res_req)
+    }
+
     fn parse_guard<T, E, F>(ctx: &str, f: F) -> Option<T>
     where
         E: std::fmt::Debug,
@@ -421,7 +444,13 @@ impl UmacBs {
                     match pdu_type {
                         0 => self.rx_mac_access(queue, &mut message),
                         1 => self.rx_mac_end_hu(queue, &mut message),
-                        _ => tracing::warn!("invalid SCH-HU pdu_type bit {}", pdu_type),
+                        _ => {
+                            if self.is_rx_gain_test_mode() {
+                                tracing::warn!("invalid SCH-HU pdu_type bit {}", pdu_type);
+                            } else {
+                                panic!();
+                            }
+                        }
                     }
                 }
 
@@ -455,16 +484,31 @@ impl UmacBs {
             panic!()
         };
         if prim.pdu.get_pos() != 0 {
-            tracing::warn!(
-                "rx_mac_data called with non-zero bit position {}; rewinding to 0",
-                prim.pdu.get_pos()
-            );
-            prim.pdu.seek(0);
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!(
+                    "rx_mac_data called with non-zero bit position {}; rewinding to 0",
+                    prim.pdu.get_pos()
+                );
+                prim.pdu.seek(0);
+            } else {
+                assert!(prim.pdu.get_pos() == 0);
+            }
         }
 
-        let Some(pdu) = Self::parse_guard("rx_mac_data/MacData", || MacData::from_bitbuf(&mut prim.pdu)) else {
-            tracing::warn!("Failed parsing MacData {}", prim.pdu.dump_bin());
-            return;
+        let pdu = if self.is_rx_gain_test_mode() {
+            let Some(pdu) = Self::parse_guard("rx_mac_data/MacData", || MacData::from_bitbuf(&mut prim.pdu)) else {
+                tracing::warn!("Failed parsing MacData {}", prim.pdu.dump_bin());
+                return;
+            };
+            pdu
+        } else {
+            match MacData::from_bitbuf(&mut prim.pdu) {
+                Ok(pdu) => pdu,
+                Err(e) => {
+                    tracing::warn!("Failed parsing MacData: {:?} {}", e, prim.pdu.dump_bin());
+                    return;
+                }
+            }
         };
         tracing::debug!("<- {:?}", pdu);
 
@@ -473,9 +517,14 @@ impl UmacBs {
             unimplemented_log!("event labels not implemented");
             return;
         }
-        let Some(addr) = pdu.addr else {
-            tracing::warn!("rx_mac_data: missing address without event label; dropping PDU");
-            return;
+        let addr = if self.is_rx_gain_test_mode() {
+            let Some(addr) = pdu.addr else {
+                tracing::warn!("rx_mac_data: missing address without event label; dropping PDU");
+                return;
+            };
+            addr
+        } else {
+            pdu.addr.unwrap()
         };
 
         let (mut pdu_len_bits, is_frag_start, second_half_stolen, is_null_pdu) = {
@@ -496,13 +545,21 @@ impl UmacBs {
                         (prim.pdu.get_len(), true, false, false)
                     }
                     _ => {
-                        tracing::warn!("rx_mac_data: Invalid length_ind {}", len_ind);
-                        return;
+                        if self.is_rx_gain_test_mode() {
+                            tracing::warn!("rx_mac_data: Invalid length_ind {}", len_ind);
+                            return;
+                        } else {
+                            panic!("rx_mac_data: Invalid length_ind {}", len_ind);
+                        }
                     }
                 }
             } else {
                 // We have a capacity request
-                let frag_start = pdu.frag_flag.unwrap_or(false);
+                let frag_start = if self.is_rx_gain_test_mode() {
+                    pdu.frag_flag.unwrap_or(false)
+                } else {
+                    pdu.frag_flag.unwrap()
+                };
                 tracing::trace!(
                     "rx_mac_data: cap_req {}",
                     if frag_start { "with frag_start" } else { "" }
@@ -533,8 +590,12 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_data") {
-            return;
+        if self.is_rx_gain_test_mode() {
+            if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_data") {
+                return;
+            }
+        } else {
+            prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
         }
         tracing::trace!(
             "rx_mac_data: pdu: {} sdu: {} fb: {}: {}",
@@ -559,7 +620,7 @@ impl UmacBs {
         // Handle reservation if present
         let msg_dltime = self.dltime.add_timeslots(-2); // Msg on uplink was sent two timeslots ago. 
         if let Some(res_req) = &pdu.reservation_req {
-            let grant = self.channel_scheduler.ul_process_cap_req(msg_dltime.t, addr, res_req);
+            let grant = self.ul_process_cap_req_maybe_test_safe(msg_dltime.t, addr, res_req);
             if let Some(grant) = grant {
                 // Schedule grant
                 self.channel_scheduler.dl_enqueue_grant(msg_dltime.t, addr, grant);
@@ -625,16 +686,31 @@ impl UmacBs {
             panic!()
         };
         if prim.pdu.get_pos() != 0 {
-            tracing::warn!(
-                "rx_mac_access called with non-zero bit position {}; rewinding to 0",
-                prim.pdu.get_pos()
-            );
-            prim.pdu.seek(0);
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!(
+                    "rx_mac_access called with non-zero bit position {}; rewinding to 0",
+                    prim.pdu.get_pos()
+                );
+                prim.pdu.seek(0);
+            } else {
+                assert!(prim.pdu.get_pos() == 0);
+            }
         }
 
-        let Some(pdu) = Self::parse_guard("rx_mac_access/MacAccess", || MacAccess::from_bitbuf(&mut prim.pdu)) else {
-            tracing::warn!("Failed parsing MacAccess {}", prim.pdu.dump_bin());
-            return;
+        let pdu = if self.is_rx_gain_test_mode() {
+            let Some(pdu) = Self::parse_guard("rx_mac_access/MacAccess", || MacAccess::from_bitbuf(&mut prim.pdu)) else {
+                tracing::warn!("Failed parsing MacAccess {}", prim.pdu.dump_bin());
+                return;
+            };
+            pdu
+        } else {
+            match MacAccess::from_bitbuf(&mut prim.pdu) {
+                Ok(pdu) => pdu,
+                Err(e) => {
+                    tracing::warn!("Failed parsing MacAccess: {:?} {}", e, prim.pdu.dump_bin());
+                    return;
+                }
+            }
         };
         tracing::debug!("<- {:?}", pdu);
 
@@ -645,8 +721,12 @@ impl UmacBs {
         } else if let Some(addr) = pdu.addr {
             addr
         } else {
-            tracing::warn!("rx_mac_access: missing address without event label; dropping PDU");
-            return;
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!("rx_mac_access: missing address without event label; dropping PDU");
+                return;
+            } else {
+                panic!()
+            }
         };
 
         // Compute len and extract flags
@@ -683,8 +763,12 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_access") {
-            return;
+        if self.is_rx_gain_test_mode() {
+            if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_access") {
+                return;
+            }
+        } else {
+            prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
         }
         tracing::trace!(
             "rx_mac_access: pdu: {} sdu: {} fb: {}: {}",
@@ -712,7 +796,7 @@ impl UmacBs {
 
         // Handle reservation if present
         if let Some(res_req) = &pdu.reservation_req {
-            let grant = self.channel_scheduler.ul_process_cap_req(msg_dltime.t, addr, res_req);
+            let grant = self.ul_process_cap_req_maybe_test_safe(msg_dltime.t, addr, res_req);
             if let Some(grant) = grant {
                 // Schedule grant
                 self.channel_scheduler.dl_enqueue_grant(msg_dltime.t, addr, grant);
@@ -784,17 +868,32 @@ impl UmacBs {
             panic!()
         };
         if prim.pdu.get_pos() != 0 {
-            tracing::warn!(
-                "rx_mac_frag_ul called with non-zero bit position {}; rewinding to 0",
-                prim.pdu.get_pos()
-            );
-            prim.pdu.seek(0);
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!(
+                    "rx_mac_frag_ul called with non-zero bit position {}; rewinding to 0",
+                    prim.pdu.get_pos()
+                );
+                prim.pdu.seek(0);
+            } else {
+                assert!(prim.pdu.get_pos() == 0);
+            }
         }
 
         // Parse header and optional ChanAlloc
-        let Some(pdu) = Self::parse_guard("rx_mac_frag_ul/MacFragUl", || MacFragUl::from_bitbuf(&mut prim.pdu)) else {
-            tracing::warn!("Failed parsing MacFragUl {}", prim.pdu.dump_bin());
-            return;
+        let pdu = if self.is_rx_gain_test_mode() {
+            let Some(pdu) = Self::parse_guard("rx_mac_frag_ul/MacFragUl", || MacFragUl::from_bitbuf(&mut prim.pdu)) else {
+                tracing::warn!("Failed parsing MacFragUl {}", prim.pdu.dump_bin());
+                return;
+            };
+            pdu
+        } else {
+            match MacFragUl::from_bitbuf(&mut prim.pdu) {
+                Ok(pdu) => pdu,
+                Err(e) => {
+                    tracing::warn!("Failed parsing MacFragUl: {:?} {}", e, prim.pdu.dump_bin());
+                    return;
+                }
+            }
         };
         tracing::debug!("<- {:?}", pdu);
 
@@ -808,8 +907,12 @@ impl UmacBs {
             }
         };
         pdu_len_bits -= num_fill_bits;
-        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_frag_ul") {
-            return;
+        if self.is_rx_gain_test_mode() {
+            if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_frag_ul") {
+                return;
+            }
+        } else {
+            prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
         }
         tracing::debug!("rx_mac_frag_ul: pdu_len_bits: {} fill_bits: {}", pdu_len_bits, num_fill_bits);
 
@@ -836,17 +939,32 @@ impl UmacBs {
             panic!()
         };
         if prim.pdu.get_pos() != 0 {
-            tracing::warn!(
-                "rx_mac_end_ul called with non-zero bit position {}; rewinding to 0",
-                prim.pdu.get_pos()
-            );
-            prim.pdu.seek(0);
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!(
+                    "rx_mac_end_ul called with non-zero bit position {}; rewinding to 0",
+                    prim.pdu.get_pos()
+                );
+                prim.pdu.seek(0);
+            } else {
+                assert!(prim.pdu.get_pos() == 0);
+            }
         }
 
         // Parse header and optional ChanAlloc
-        let Some(pdu) = Self::parse_guard("rx_mac_end_ul/MacEndUl", || MacEndUl::from_bitbuf(&mut prim.pdu)) else {
-            tracing::warn!("Failed parsing MacEndUl {}", prim.pdu.dump_bin());
-            return;
+        let pdu = if self.is_rx_gain_test_mode() {
+            let Some(pdu) = Self::parse_guard("rx_mac_end_ul/MacEndUl", || MacEndUl::from_bitbuf(&mut prim.pdu)) else {
+                tracing::warn!("Failed parsing MacEndUl {}", prim.pdu.dump_bin());
+                return;
+            };
+            pdu
+        } else {
+            match MacEndUl::from_bitbuf(&mut prim.pdu) {
+                Ok(pdu) => pdu,
+                Err(e) => {
+                    tracing::warn!("Failed parsing MacEndUl: {:?} {}", e, prim.pdu.dump_bin());
+                    return;
+                }
+            }
         };
         tracing::debug!("<- {:?}", pdu);
 
@@ -872,8 +990,12 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_end_ul") {
-            return;
+        if self.is_rx_gain_test_mode() {
+            if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_end_ul") {
+                return;
+            }
+        } else {
+            prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
         }
         tracing::trace!(
             "rx_mac_end_ul: pdu: {} sdu: {} fb: {}: {}",
@@ -891,8 +1013,12 @@ impl UmacBs {
             return;
         };
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
-            tracing::warn!("rx_mac_end_ul: Encryption not supported");
-            return;
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!("rx_mac_end_ul: Encryption not supported");
+                return;
+            } else {
+                unimplemented!("rx_mac_end_ul: Encryption not supported");
+            }
         }
 
         // Insert last fragment and retrieve finalized block
@@ -904,7 +1030,7 @@ impl UmacBs {
 
         // Handle reservation if present
         if let Some(res_req) = &pdu.reservation_req {
-            let grant = self.channel_scheduler.ul_process_cap_req(msg_dltime.t, defragbuf.addr, res_req);
+            let grant = self.ul_process_cap_req_maybe_test_safe(msg_dltime.t, defragbuf.addr, res_req);
             if let Some(grant) = grant {
                 // Schedule grant
                 self.channel_scheduler.dl_enqueue_grant(msg_dltime.t, defragbuf.addr, grant);
@@ -948,17 +1074,32 @@ impl UmacBs {
             panic!()
         };
         if prim.pdu.get_pos() != 0 {
-            tracing::warn!(
-                "rx_mac_end_hu called with non-zero bit position {}; rewinding to 0",
-                prim.pdu.get_pos()
-            );
-            prim.pdu.seek(0);
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!(
+                    "rx_mac_end_hu called with non-zero bit position {}; rewinding to 0",
+                    prim.pdu.get_pos()
+                );
+                prim.pdu.seek(0);
+            } else {
+                assert!(prim.pdu.get_pos() == 0);
+            }
         }
 
         // Parse header and optional ChanAlloc
-        let Some(pdu) = Self::parse_guard("rx_mac_end_hu/MacEndHu", || MacEndHu::from_bitbuf(&mut prim.pdu)) else {
-            tracing::warn!("Failed parsing MacEndHu {}", prim.pdu.dump_bin());
-            return;
+        let pdu = if self.is_rx_gain_test_mode() {
+            let Some(pdu) = Self::parse_guard("rx_mac_end_hu/MacEndHu", || MacEndHu::from_bitbuf(&mut prim.pdu)) else {
+                tracing::warn!("Failed parsing MacEndHu {}", prim.pdu.dump_bin());
+                return;
+            };
+            pdu
+        } else {
+            match MacEndHu::from_bitbuf(&mut prim.pdu) {
+                Ok(pdu) => pdu,
+                Err(e) => {
+                    tracing::warn!("Failed parsing MacEndHu: {:?} {}", e, prim.pdu.dump_bin());
+                    return;
+                }
+            }
         };
         tracing::debug!("<- {:?}", pdu);
 
@@ -990,8 +1131,12 @@ impl UmacBs {
         };
         pdu_len_bits -= num_fill_bits;
         let orig_end = prim.pdu.get_raw_end();
-        if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_end_hu") {
-            return;
+        if self.is_rx_gain_test_mode() {
+            if !Self::clamp_pdu_window_or_drop(prim, pdu_len_bits, "rx_mac_end_hu") {
+                return;
+            }
+        } else {
+            prim.pdu.set_raw_end(prim.pdu.get_raw_start() + pdu_len_bits);
         }
 
         // set to trace
@@ -1011,8 +1156,12 @@ impl UmacBs {
             return;
         };
         if let Some(_aie_info) = self.defrag.get_aie_info(slot_owner, msg_dltime) {
-            tracing::warn!("rx_mac_end_hu: Encryption not supported");
-            return;
+            if self.is_rx_gain_test_mode() {
+                tracing::warn!("rx_mac_end_hu: Encryption not supported");
+                return;
+            } else {
+                unimplemented!("rx_mac_end_hu: Encryption not supported");
+            }
         }
 
         // Insert last fragment and retrieve finalized block
@@ -1024,7 +1173,7 @@ impl UmacBs {
 
         // Handle reservation if present
         if let Some(res_req) = &pdu.reservation_req {
-            let grant = self.channel_scheduler.ul_process_cap_req(msg_dltime.t, defragbuf.addr, res_req);
+            let grant = self.ul_process_cap_req_maybe_test_safe(msg_dltime.t, defragbuf.addr, res_req);
             if let Some(grant) = grant {
                 // Schedule grant
                 self.channel_scheduler.dl_enqueue_grant(msg_dltime.t, defragbuf.addr, grant);
@@ -1073,9 +1222,20 @@ impl UmacBs {
             panic!()
         };
 
-        let Some(pdu) = Self::parse_guard("rx_ul_mac_u_signal/MacUSignal", || MacUSignal::from_bitbuf(&mut prim.pdu)) else {
-            tracing::warn!("Failed parsing MacUSignal {}", prim.pdu.dump_bin());
-            return;
+        let pdu = if self.is_rx_gain_test_mode() {
+            let Some(pdu) = Self::parse_guard("rx_ul_mac_u_signal/MacUSignal", || MacUSignal::from_bitbuf(&mut prim.pdu)) else {
+                tracing::warn!("Failed parsing MacUSignal {}", prim.pdu.dump_bin());
+                return;
+            };
+            pdu
+        } else {
+            match MacUSignal::from_bitbuf(&mut prim.pdu) {
+                Ok(pdu) => pdu,
+                Err(e) => {
+                    tracing::warn!("Failed parsing MacUSignal: {:?} {}", e, prim.pdu.dump_bin());
+                    return;
+                }
+            }
         };
         tracing::debug!("<- {:?}", pdu);
 
@@ -1125,16 +1285,33 @@ impl UmacBs {
             panic!()
         };
 
-        let Some(_pdu) = Self::parse_guard("rx_ul_mac_u_blck/MacUBlck", || MacUBlck::from_bitbuf(&mut prim.pdu)) else {
-            tracing::warn!("Failed parsing MacUBlck {}", prim.pdu.dump_bin());
-            return;
-        };
-        tracing::debug!("<- {:?}", _pdu);
+        if self.is_rx_gain_test_mode() {
+            let Some(_pdu) = Self::parse_guard("rx_ul_mac_u_blck/MacUBlck", || MacUBlck::from_bitbuf(&mut prim.pdu)) else {
+                tracing::warn!("Failed parsing MacUBlck {}", prim.pdu.dump_bin());
+                return;
+            };
+            tracing::debug!("<- {:?}", _pdu);
 
-        // TODO implement reservation handling for MAC-U-BLCK.
-        // For now, do not abort the whole stack when this optional/rare uplink PDU appears.
-        tracing::warn!("unimplemented: rx_ul_mac_u_blck reservation handling");
-        return;
+            // TODO implement reservation handling for MAC-U-BLCK.
+            // For now, do not abort the whole stack when this optional/rare uplink PDU appears.
+            tracing::warn!("unimplemented: rx_ul_mac_u_blck reservation handling");
+            return;
+        }
+
+        let _pdu = match MacUBlck::from_bitbuf(&mut prim.pdu) {
+            Ok(pdu) => {
+                tracing::debug!("<- {:?}", pdu);
+                pdu
+            }
+            Err(e) => {
+                tracing::warn!("Failed parsing MacUBlck: {:?} {}", e, prim.pdu.dump_bin());
+                return;
+            }
+        };
+
+        // Handle reservation if present
+        // TODO implement slightly different handling since enum is not the same.
+        unimplemented!();
     }
 
     fn rx_ul_tma_unitdata_req(&mut self, _queue: &mut MessageQueue, message: SapMsg) {

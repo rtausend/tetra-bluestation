@@ -318,15 +318,6 @@ impl BsChannelScheduler {
     /// Tries to find a way to satisfy a granting request, and reserves the slots in the schedule.
     /// If successful, returns a BasicSlotgrant with the granting delay and capacity allocation.
     pub fn ul_process_cap_req(&mut self, timeslot: u8, addr: TetraAddress, res_req: &ReservationRequirement) -> Option<BasicSlotgrant> {
-        if res_req == &ReservationRequirement::ReqOver68 {
-            tracing::warn!(
-                "ul_process_cap_req: unsupported reservation {:?} for addr {}, ignoring",
-                res_req,
-                addr
-            );
-            return None;
-        }
-
         let is_halfslot = res_req == &ReservationRequirement::Req1Subslot;
         let requested_cap = if is_halfslot { 1 } else { res_req.to_req_slotcount() };
 
