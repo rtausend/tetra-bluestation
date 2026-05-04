@@ -240,64 +240,29 @@ impl<D: RxTxDev> PhyBs<D> {
 
     /// Calculate gap-detection metrics from detected timeslots
     /// Returns: (gaps_detected, gap_rate, stability_status)
+    /// gaps_detected = expected_slots - detected_bursts
     fn calculate_gap_metrics(detected_slot_times: &[TdmaTime], expected_slots: u32) -> (u32, f64, String) {
         if expected_slots == 0 {
             return (0, 0.0, "STABLE".to_string());
         }
 
-        if detected_slot_times.is_empty() {
-            // No bursts detected = 100% gap rate
-            let gap_rate = 1.0;
-            let status = if gap_rate >= 0.03 { "UNSTABLE" } else { "STABLE" }.to_string();
-            return (expected_slots, gap_rate, status);
-        }
-
-        // Sort detected timeslots by frame and timeslot
-        let mut sorted_times = detected_slot_times.to_vec();
-        sorted_times.sort_by(|a, b| {
-            // Sort by multiframe first, then frame, then timeslot
-            match a.m.cmp(&b.m) {
-                Ordering::Equal => match a.f.cmp(&b.f) {
-                    Ordering::Equal => a.t.cmp(&b.t),
-                    other => other,
-                },
-                other => other,
-            }
-        });
-
-        // Detect gaps: consecutive timeslots should differ by 1 in the timeslot field
-        let mut gaps_found = 0u32;
-        for window in sorted_times.windows(2) {
-            let curr = &window[0];
-            let next = &window[1];
-
-            // Check if it's a gap (non-consecutive timeslots)
-            // Gap exists if: same frame and timeslot differs by more than 1, OR different frames
-            if curr.m == next.m {
-                let expected_next_slot = if curr.t < 4 { curr.t + 1 } else { 1 };
-                if next.t != expected_next_slot {
-                    gaps_found = gaps_found.saturating_add(1);
-                }
-            } else if next.m == curr.m + 1 {
-                // Frame boundary: curr should be slot 4, next should be slot 1
-                if curr.t != 4 || next.t != 1 {
-                    gaps_found = gaps_found.saturating_add(1);
-                }
-            } else {
-                // Non-consecutive frames = gap
-                gaps_found = gaps_found.saturating_add(1);
-            }
-        }
-
+        // Count unique detected bursts (each entry is one detected burst)
+        let detected_bursts = detected_slot_times.len() as u32;
+        
+        // Calculate gaps: missing slots = expected - detected
+        let gaps_detected = expected_slots.saturating_sub(detected_bursts);
+        
+        // Gap rate: fraction of missing slots relative to expected
         let gap_rate = if expected_slots > 0 {
-            gaps_found as f64 / expected_slots as f64
+            gaps_detected as f64 / expected_slots as f64
         } else {
             0.0
         };
 
+        // Classify as STABLE (<3% gaps) or UNSTABLE (>=3% gaps)
         let stability_status = if gap_rate >= 0.03 { "UNSTABLE" } else { "STABLE" }.to_string();
 
-        (gaps_found, gap_rate, stability_status)
+        (gaps_detected, gap_rate, stability_status)
     }
 
     fn finalize_current_combo(runtime: &mut RxGainSweepRuntime, latest_decode_counters: &RxGainDecodeCounters) {
