@@ -62,9 +62,13 @@ def run_single_combo(binary_path, config_path, combo, combo_idx, total_combos):
     print(f"[{combo_idx+1}/{total_combos}] Running: {combo_str}")
     print(f"{'='*70}")
     
+    # Resolve to absolute paths so subprocess can find them
+    binary_abs = binary_path.resolve()
+    config_abs = config_path.resolve()
+    
     cmd = [
-        str(binary_path),
-        str(config_path),
+        str(binary_abs),
+        str(config_abs),
         "--rx-gain-test-single-combo",
         combo_str
     ]

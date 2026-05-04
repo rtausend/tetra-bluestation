@@ -9,6 +9,14 @@ BINARY="${BINARY:-./target/release/bluestation-bs}"
 CONFIG="${CONFIG:-./example_config/config.toml}"
 DELAY="${DELAY:-1}"
 
+# Resolve to absolute paths
+if [[ ! "$BINARY" = /* ]]; then
+    BINARY="$PWD/$BINARY"
+fi
+if [[ ! "$CONFIG" = /* ]]; then
+    CONFIG="$PWD/$CONFIG"
+fi
+
 LNA_FROM="${LNA_FROM:-24}"
 LNA_TO="${LNA_TO:-48}"
 LNA_STEP="${LNA_STEP:-12}"
