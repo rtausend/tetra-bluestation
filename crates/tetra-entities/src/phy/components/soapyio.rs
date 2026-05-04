@@ -62,6 +62,34 @@ macro_rules! soapycheck {
 }
 
 impl SoapyIo {
+    fn resolve_rx_gain_name_for_device(
+        dev: &soapysdr::Device,
+        rx_ch: usize,
+        requested_name: &str,
+    ) -> Result<String, soapysdr::Error> {
+        let available = dev.list_gains(soapysdr::Direction::Rx, rx_ch)?;
+        if let Some(found) = available
+            .iter()
+            .find(|name| name.eq_ignore_ascii_case(requested_name))
+        {
+            if found != requested_name {
+                tracing::debug!(
+                    requested_gain_name = requested_name,
+                    mapped_gain_name = found.as_str(),
+                    "Mapped RX gain name to device canonical name"
+                );
+            }
+            return Ok(found.clone());
+        }
+
+        tracing::warn!(
+            requested_gain_name = requested_name,
+            available_rx_gains = ?available,
+            "Requested RX gain name not advertised by device; using requested name as-is"
+        );
+        Ok(requested_name.to_string())
+    }
+
     pub fn new(cfg: &SharedConfig) -> Result<Self, soapysdr::Error> {
         Self::new_with_rx_gain_override(cfg, None)
     }
@@ -145,14 +173,16 @@ impl SoapyIo {
 
             if let Some(override_gains) = rx_gain_override {
                 for (name, gain) in override_gains {
+                    let canonical_name = Self::resolve_rx_gain_name_for_device(&dev, rx_ch, name.as_str())?;
+
                     soapycheck!(
                         "set RX gain override",
-                        dev.set_gain_element(soapysdr::Direction::Rx, rx_ch, name.as_str(), *gain)
+                        dev.set_gain_element(soapysdr::Direction::Rx, rx_ch, canonical_name.as_str(), *gain)
                     );
 
                     let applied = soapycheck!(
                         "read back RX gain override",
-                        dev.gain_element(soapysdr::Direction::Rx, rx_ch, name.as_str())
+                        dev.gain_element(soapysdr::Direction::Rx, rx_ch, canonical_name.as_str())
                     );
                     let delta = (applied - *gain).abs();
                     if delta > 0.25 {
@@ -371,17 +401,20 @@ impl SoapyIo {
         }
 
         for (name, gain) in gains {
+            let canonical_name = Self::resolve_rx_gain_name_for_device(&self.dev, self.rx_ch, name.as_str())?;
+
             self.dev
-                .set_gain_element(soapysdr::Direction::Rx, self.rx_ch, name.as_str(), *gain)?;
+                .set_gain_element(soapysdr::Direction::Rx, self.rx_ch, canonical_name.as_str(), *gain)?;
 
             // Read back configured value so runtime sweeps can verify what the device accepted.
             let applied = self
                 .dev
-                .gain_element(soapysdr::Direction::Rx, self.rx_ch, name.as_str())?;
+                .gain_element(soapysdr::Direction::Rx, self.rx_ch, canonical_name.as_str())?;
             let delta = (applied - *gain).abs();
 
             tracing::debug!(
                 gain_name = name.as_str(),
+                canonical_gain_name = canonical_name.as_str(),
                 requested_gain = *gain,
                 applied_gain = applied,
                 delta,
