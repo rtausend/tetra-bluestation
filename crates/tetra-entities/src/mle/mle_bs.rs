@@ -92,6 +92,10 @@ impl MleBs {
             }
             SapMsgInner::TlaTlUnitdataIndBl(_) => {
                 // self.rx_tla_unitdata_ind_bl(queue, message);
+                if self.config.state_read().rx_gain_test_mode {
+                    tracing::warn!("rx_gain_test_mode: dropping unexpected TL-UNITDATA in MLE BS path");
+                    return;
+                }
                 panic!("BS can't receive TL-UNITDATA");
             }
             _ => {
