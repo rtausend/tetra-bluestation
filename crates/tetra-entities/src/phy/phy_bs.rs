@@ -88,6 +88,8 @@ struct RxGainSweepRuntime {
     window_start_unix: u64,
     /// Counting starts only after first detected burst to avoid idle startup skew.
     measurement_started: bool,
+    /// Number of MeasureWindow ticks seen before first burst.
+    waiting_ticks_before_first_burst: u32,
 }
 
 pub struct PhyBs<D: RxTxDev> {
@@ -521,6 +523,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 runtime.detected_slot_times.clear();
                 runtime.window_start_unix = 0;
                 runtime.measurement_started = false;
+                runtime.waiting_ticks_before_first_burst = 0;
                 runtime.window_decode_baseline = config.state_read().rx_gain_decode_counters.clone();
                 runtime.phase = RxGainSweepPhase::Settling;
             }
@@ -528,7 +531,11 @@ impl<D: RxTxDev> PhyBs<D> {
                 if runtime.settling_remaining > 0 {
                     runtime.settling_remaining -= 1;
                 } else {
-                    tracing::info!(combo_index = runtime.current_idx, "rx_gain_sweep_measure_start");
+                    tracing::info!(
+                        combo_index = runtime.current_idx,
+                        target_bursts = runtime.window_bursts,
+                        "rx_gain_sweep_measure_start_waiting_for_first_burst"
+                    );
                     // Actual counting starts on first detected burst in tick_post.
                     runtime.phase = RxGainSweepPhase::MeasureWindow;
                 }
@@ -566,6 +573,15 @@ impl<D: RxTxDev> PhyBs<D> {
 
         if !runtime.measurement_started {
             if detected_bursts == 0 {
+                runtime.waiting_ticks_before_first_burst = runtime.waiting_ticks_before_first_burst.saturating_add(1);
+                if runtime.waiting_ticks_before_first_burst % 100 == 0 {
+                    tracing::info!(
+                        combo_index = runtime.current_idx,
+                        waited_ticks = runtime.waiting_ticks_before_first_burst,
+                        target_bursts = runtime.window_bursts,
+                        "rx_gain_sweep_waiting_for_first_burst"
+                    );
+                }
                 return;
             }
 
@@ -578,6 +594,7 @@ impl<D: RxTxDev> PhyBs<D> {
 
             tracing::info!(
                 combo_index = runtime.current_idx,
+                waited_ticks = runtime.waiting_ticks_before_first_burst,
                 bursts_in_tick = detected_bursts,
                 "rx_gain_sweep_first_burst_detected_start_counting"
             );
@@ -723,12 +740,22 @@ impl<D: RxTxDev> PhyBs<D> {
                             detected_slot_times: Vec::new(),
                             window_start_unix: 0,
                             measurement_started: false,
+                            waiting_ticks_before_first_burst: 0,
                         })
                     })
             } else {
                 None
             }
         };
+
+        if let Some(runtime) = &rx_gain_sweep {
+            tracing::info!(
+                combos = runtime.combos.len(),
+                window_bursts = runtime.window_bursts,
+                settling_slots = runtime.settling_slots,
+                "rx_gain_sweep_enabled"
+            );
+        }
 
         Self {
             config,
