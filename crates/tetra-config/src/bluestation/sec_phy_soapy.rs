@@ -24,6 +24,7 @@ pub struct CfgRxGainSweep {
     pub window_bursts: u32,
     pub settling_slots: u32,
     pub auto_exit: bool,
+    pub restart_process_per_combo: bool,
     pub test_signal_profile: Option<String>,
     pub required_ul_slots: Vec<u8>,
     pub min_slot_crc_pass_rate: Option<f64>,
@@ -122,6 +123,8 @@ pub struct RxGainSweepDto {
     pub settling_slots: Option<u32>,
     #[serde(default)]
     pub auto_exit: bool,
+    #[serde(default)]
+    pub restart_process_per_combo: bool,
 
     pub test_signal_profile: Option<String>,
     #[serde(default)]

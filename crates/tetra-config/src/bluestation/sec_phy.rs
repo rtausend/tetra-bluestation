@@ -96,6 +96,7 @@ pub fn phy_dto_to_cfg(src: PhyIoDto) -> CfgPhyIo {
                 window_bursts: sweep_dto.window_bursts.unwrap_or(500),
                 settling_slots: sweep_dto.settling_slots.unwrap_or(8),
                 auto_exit: sweep_dto.auto_exit,
+                restart_process_per_combo: sweep_dto.restart_process_per_combo,
                 test_signal_profile: sweep_dto.test_signal_profile,
                 required_ul_slots: sweep_dto.required_ul_slots,
                 min_slot_crc_pass_rate: sweep_dto.min_slot_crc_pass_rate,
