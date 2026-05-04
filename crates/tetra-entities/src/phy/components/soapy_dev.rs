@@ -192,6 +192,17 @@ impl RxTxDev for RxTxDevSoapySdr {
     }
 
     fn reinitialize_and_apply_rx_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
+        // First try to apply gains on the already-running device (fast path).
+        // This preserves RX buffer synchronization and initial_time.
+        if let Ok(()) = self.sdr.apply_rx_gain_combo(gains) {
+            tracing::debug!("Successfully applied RX gain combo on running device without restart");
+            return Ok(());
+        }
+
+        // If that fails, fall back to full device restart with gain override.
+        // This is the "hard reset" that ensures gains are applied even if
+        // the running device cannot be reconfigured.
+        tracing::warn!("Runtime RX gain application failed; falling back to full device restart with gain override");
         self.reinitialize_with_gain_combo(gains)
     }
 }
