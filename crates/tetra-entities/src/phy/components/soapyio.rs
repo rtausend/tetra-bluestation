@@ -383,6 +383,21 @@ impl SoapyIo {
     pub fn tx_enabled(&self) -> bool {
         self.tx.is_some()
     }
+
+    /// Deactivate and drop RX/TX streams so the device can be reconfigured or reopened.
+    pub fn shutdown_streams(&mut self) {
+        if let Some(mut rx) = self.rx.take() {
+            if let Err(err) = rx.deactivate(None) {
+                tracing::warn!("Failed to deactivate RX stream during shutdown: {}", err);
+            }
+        }
+
+        if let Some(mut tx) = self.tx.take() {
+            if let Err(err) = tx.deactivate(None) {
+                tracing::warn!("Failed to deactivate TX stream during shutdown: {}", err);
+            }
+        }
+    }
 }
 
 // Messy logic related to opening a device follows...

@@ -108,6 +108,10 @@ impl RxTxDevSoapySdr {
     }
 
     fn reinitialize_from_config(&mut self) -> Result<(), RxTxDevError> {
+        self.rx_dsp = None;
+        self.tx_dsp = None;
+        self.sdr.shutdown_streams();
+
         let cfg = self.cfg.clone();
         let rebuilt = Self::build_from_cfg(&cfg)?;
         *self = rebuilt;
