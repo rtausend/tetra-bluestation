@@ -243,6 +243,10 @@ struct Args {
     #[arg(long, default_value_t = false)]
     rx_gain_test: bool,
 
+    /// Single gain combo to test in format "lna=24.0 pga=10.0" (implies rx_gain_test, auto-exits after measurement)
+    #[arg(long)]
+    rx_gain_test_single_combo: Option<String>,
+
     /// Optional override for test device transmit power metadata in dBm.
     #[arg(long)]
     test_tx_power_db: Option<f64>,
@@ -264,9 +268,45 @@ fn main() {
     let args = Args::parse();
 
     // Build immutable, cheaply clonable SharedConfig and build the base station stack
-    let stack_cfg = load_config_from_toml(&args.config);
+    let mut stack_cfg = load_config_from_toml(&args.config);
 
-    if args.rx_gain_test {
+    // Handle single combo mode
+    if let Some(single_combo_str) = &args.rx_gain_test_single_combo {
+        eprintln!(" -> RX gain test SINGLE COMBO mode: {}", single_combo_str);
+        // Parse "lna=24.0 pga=10.0" into gain ranges with single values
+        let mut single_combo_gains = HashMap::new();
+        for pair in single_combo_str.split_whitespace() {
+            if let Some((name, value_str)) = pair.split_once('=') {
+                if let Ok(value) = value_str.parse::<f64>() {
+                    single_combo_gains.insert(name.to_lowercase(), value);
+                }
+            }
+        }
+        
+        // Override sweep configuration to use only this one combo
+        if let Some(soapy_cfg) = &mut stack_cfg.phy_io.soapysdr {
+            if let Some(sweep_cfg) = &mut soapy_cfg.rx_gain_sweep {
+                eprintln!(" -> Converting single combo gains into sweep configuration");
+                // Convert flat gains into single-value ranges
+                sweep_cfg.gains.clear();
+                for (name, value) in single_combo_gains {
+                    sweep_cfg.gains.insert(
+                        name,
+                        tetra_config::bluestation::CfgGainRange {
+                            from: value,
+                            to: value,
+                            step: 1.0, // doesn't matter, only one value
+                        },
+                    );
+                }
+                // Enable auto-exit so process terminates after this combo
+                sweep_cfg.auto_exit = true;
+                eprintln!(" -> Auto-exit enabled for single combo mode");
+            }
+        }
+    }
+
+    if args.rx_gain_test || args.rx_gain_test_single_combo.is_some() {
         match resolve_rx_gain_test_metadata(&args, &stack_cfg) {
             Ok(meta) => {
                 eprintln!(" -> RX gain test mode enabled (autonomous run)");
@@ -280,7 +320,7 @@ fn main() {
     }
 
     let mut state = StackState::default();
-    state.rx_gain_test_mode = args.rx_gain_test;
+    state.rx_gain_test_mode = args.rx_gain_test || args.rx_gain_test_single_combo.is_some();
     let mut cfg = SharedConfig::from_parts(stack_cfg, Some(state));
 
     let _log_guards = debug::setup_logging_default(cfg.config().debug_log.clone());
