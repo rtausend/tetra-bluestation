@@ -424,6 +424,7 @@ impl SoapyIo {
             if delta > 0.25 {
                 tracing::warn!(
                     gain_name = name.as_str(),
+                    canonical_gain_name = canonical_name.as_str(),
                     requested_gain = *gain,
                     applied_gain = applied,
                     delta,

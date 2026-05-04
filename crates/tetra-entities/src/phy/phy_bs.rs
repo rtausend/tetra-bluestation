@@ -90,6 +90,8 @@ struct RxGainSweepRuntime {
     measurement_started: bool,
     /// Number of MeasureWindow ticks seen before first burst.
     waiting_ticks_before_first_burst: u32,
+    /// Maximum number of MeasureWindow ticks to wait for first burst before skipping combo.
+    first_burst_wait_limit_ticks: u32,
 }
 
 pub struct PhyBs<D: RxTxDev> {
@@ -241,6 +243,14 @@ impl<D: RxTxDev> PhyBs<D> {
         }
     }
 
+    fn expected_ticks_for_target_detectable(signal_mode: &str, target_detectable: u32) -> u32 {
+        if signal_mode.to_ascii_lowercase().contains("t1") {
+            target_detectable.saturating_mul(4)
+        } else {
+            target_detectable
+        }
+    }
+
     fn rank_rx_gain_result(runtime: &RxGainSweepRuntime, result: &RxGainSweepResult) -> (u8, f64, f64, u32) {
         let passes_required = Self::passes_required_slots(runtime, result);
         let passes_threshold = Self::passes_slot_crc_threshold(runtime, result);
@@ -298,7 +308,11 @@ impl<D: RxTxDev> PhyBs<D> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let duration_ms = ((now_unix.saturating_sub(runtime.window_start_unix)) * 1000) as u64;
+        let duration_ms = if runtime.window_start_unix == 0 {
+            0
+        } else {
+            ((now_unix.saturating_sub(runtime.window_start_unix)) * 1000) as u64
+        };
 
         let result = RxGainSweepResult {
             gain_combo: gain_combo.clone(),
@@ -576,6 +590,21 @@ impl<D: RxTxDev> PhyBs<D> {
                         "rx_gain_sweep_waiting_for_first_burst"
                     );
                 }
+
+                if runtime.waiting_ticks_before_first_burst >= runtime.first_burst_wait_limit_ticks {
+                    runtime.expected_slots = Self::expected_ticks_for_target_detectable(
+                        &runtime.test_signal_mode,
+                        runtime.window_bursts,
+                    );
+                    tracing::warn!(
+                        combo_index = runtime.current_idx,
+                        waited_ticks = runtime.waiting_ticks_before_first_burst,
+                        wait_limit_ticks = runtime.first_burst_wait_limit_ticks,
+                        expected_ticks = runtime.expected_slots,
+                        "rx_gain_sweep_no_first_burst_timeout_skip_combo"
+                    );
+                    runtime.phase = RxGainSweepPhase::FinalizeAndNext;
+                }
                 return;
             }
 
@@ -735,6 +764,7 @@ impl<D: RxTxDev> PhyBs<D> {
                             window_start_unix: 0,
                             measurement_started: false,
                             waiting_ticks_before_first_burst: 0,
+                            first_burst_wait_limit_ticks: (sweep.window_bursts.saturating_mul(3)).max(600),
                         })
                     })
             } else {
