@@ -10,6 +10,8 @@ import sys
 import time
 import argparse
 import shutil
+import csv
+import glob
 from pathlib import Path
 
 def expand_gain_values(from_val, to_val, step):
@@ -71,6 +73,51 @@ def cleanup_config(config_path):
         return temp_config
     
     return config_path
+
+def merge_csv_results(config_dir, output_csv):
+    """
+    Merge all generated CSV files into one master CSV.
+    Finds all 'rx_gain_run_*.csv' files and combines them.
+    """
+    config_dir = Path(config_dir)
+    csv_files = sorted(glob.glob(str(config_dir / "rx_gain_run_*.csv")))
+    
+    if not csv_files:
+        print(f"No CSV files found in {config_dir}")
+        return False
+    
+    all_rows = []
+    header = None
+    
+    # Collect all rows from all CSV files
+    for csv_file in csv_files:
+        try:
+            with open(csv_file, 'r') as f:
+                reader = csv.DictReader(f)
+                if header is None and reader.fieldnames:
+                    header = reader.fieldnames
+                for row in reader:
+                    all_rows.append(row)
+        except Exception as e:
+            print(f"Warning: Could not read {csv_file}: {e}")
+            continue
+    
+    if not all_rows or header is None:
+        print(f"No valid CSV data found")
+        return False
+    
+    # Write merged CSV
+    try:
+        with open(output_csv, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=header)
+            writer.writeheader()
+            writer.writerows(all_rows)
+        print(f"\n✓ Merged {len(csv_files)} CSV files → {output_csv}")
+        print(f"  Total rows: {len(all_rows)}")
+        return True
+    except Exception as e:
+        print(f"ERROR: Failed to write merged CSV: {e}")
+        return False
 
 def generate_gain_combos(lna_from, lna_to, lna_step, pga_from, pga_to, pga_step):
     """Generate all gain combinations."""
@@ -168,8 +215,12 @@ def main():
     parser.add_argument(
         "--delay",
         type=float,
-        default=1.0,
+        default=0.5,
         help="Delay (seconds) between combos for driver recovery"
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional: Write all results to this CSV file instead of separate files"
     )
     
     args = parser.parse_args()
@@ -231,6 +282,10 @@ def main():
         except Exception:
             pass
     
+    # Merge CSV results if requested
+    if args.output:
+        merge_csv_results(config_path.parent, args.output)
+    
     # Summary
     print(f"\n{'='*70}")
     print(f"Sweep Complete!")
@@ -238,6 +293,8 @@ def main():
     print(f"Total:    {len(combos)}")
     print(f"Success:  {succeeded}")
     print(f"Failed:   {failed}")
+    if args.output:
+        print(f"Output:   {args.output}")
     print(f"{'='*70}\n")
     
     sys.exit(0 if failed == 0 else 1)

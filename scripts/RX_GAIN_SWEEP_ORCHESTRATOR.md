@@ -14,12 +14,21 @@ Instead of internal per-combo device restarts (which can cause state issues), th
 ## Usage: Python Script (Recommended)
 
 ```bash
+# Quick test with a few combos
+./scripts/rx-gain-sweep-orchestrator.py \
+    ./example_config/config.toml \
+    --lna-from 24 --lna-to 24 --lna-step 12 \
+    --pga-from 0 --pga-to 4 --pga-step 2 \
+    --delay 0.5
+
+# Full sweep with merged output
 ./scripts/rx-gain-sweep-orchestrator.py \
     ./example_config/config.toml \
     --lna-from 24 --lna-to 48 --lna-step 12 \
     --pga-from 0 --pga-to 30 --pga-step 2 \
     --binary ./target/release/bluestation-bs \
-    --delay 1.0
+    --delay 0.5 \
+    --output results_full_sweep.csv
 ```
 
 ### Parameters
@@ -32,7 +41,8 @@ Instead of internal per-combo device restarts (which can cause state issues), th
 - `--pga-from`: PGA start (dB) - default 0
 - `--pga-to`: PGA end (dB) - default 30
 - `--pga-step`: PGA step (dB) - default 2
-- `--delay`: Wait between combos (seconds) - default 1.0
+- `--delay`: Wait between combos (seconds) - default 0.5
+- `--output`: Optional: Merge all results into single CSV file
 
 ## Usage: Bash Script
 
@@ -100,7 +110,21 @@ The new `--rx-gain-test-single-combo "lna=X pga=Y"` flag:
 
 ## Output
 
-Each run appends measurements to the CSV file (path shown in program startup):
+By default, each program run creates its own timestamped CSV file in the output directory:
+```
+rx_gain_run_20250101_120000.csv
+rx_gain_run_20250101_120023.csv
+rx_gain_run_20250101_120045.csv
+...
+```
+
+**To merge all results into a single CSV**, use the `--output` flag:
+```bash
+./scripts/rx-gain-sweep-orchestrator.py config.toml \
+    --output sweep_results.csv
+```
+
+This creates a single `sweep_results.csv` with all measurements:
 ```
 run_id,timestamp,combo_idx,lna_gain_db,pga_gain_db,detect_rate,%,gap_rate,%,crc_pass_rate,%,duration_ms,status
 run_20250101_120000,2025-01-01T12:00:01Z,0,24.0,0.0,94.2,2.1,98.5,18500,STABLE
