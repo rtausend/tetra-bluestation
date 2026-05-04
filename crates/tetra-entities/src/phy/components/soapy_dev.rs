@@ -127,13 +127,9 @@ impl RxTxDevSoapySdr {
         self.tx_dsp = None;
         self.sdr.shutdown_streams();
 
-        // Wait for driver/USB to fully release the device before reloading.
-        // USB devices need time to complete disconnect sequence and free driver resources.
-        // Insufficient wait time causes device to be in an invalid state on reconnect.
-        let wait_secs = 3;
-        tracing::info!("Waiting {} seconds for driver to fully release device...", wait_secs);
-        std::thread::sleep(std::time::Duration::from_secs(wait_secs));
-
+        // Driver recovery delay is now controlled externally via orchestrator script
+        // to allow fine-tuning per deployment without recompilation.
+        
         let cfg = self.cfg.clone();
         let rebuilt = Self::build_from_cfg(&cfg, Some(gains))?;
         *self = rebuilt;
