@@ -77,13 +77,22 @@ def cleanup_config(config_path):
 def merge_csv_results(config_dir, output_csv):
     """
     Merge all generated CSV files into one master CSV.
-    Finds all 'rx_gain_run_*.csv' files and combines them.
+    Looks for rx_gain_window_*.csv (detailed results) first, then rx_gain_run_*.csv.
     """
     config_dir = Path(config_dir)
-    csv_files = sorted(glob.glob(str(config_dir / "rx_gain_run_*.csv")))
+    
+    # Try to find window CSV files first (detailed per-combo measurements)
+    csv_files = sorted(glob.glob(str(config_dir / "rx_gain_window_*.csv")))
+    file_type = "window"
+    
+    # Fallback to run CSV files if window files not found
+    if not csv_files:
+        csv_files = sorted(glob.glob(str(config_dir / "rx_gain_run_*.csv")))
+        file_type = "run"
     
     if not csv_files:
         print(f"No CSV files found in {config_dir}")
+        print(f"  Searched for: rx_gain_window_*.csv and rx_gain_run_*.csv")
         return False
     
     all_rows = []
@@ -112,7 +121,7 @@ def merge_csv_results(config_dir, output_csv):
             writer = csv.DictWriter(f, fieldnames=header)
             writer.writeheader()
             writer.writerows(all_rows)
-        print(f"\n✓ Merged {len(csv_files)} CSV files → {output_csv}")
+        print(f"\n✓ Merged {len(csv_files)} {file_type} CSV files → {output_csv}")
         print(f"  Total rows: {len(all_rows)}")
         return True
     except Exception as e:
