@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 import argparse
+import shutil
 from pathlib import Path
 
 def expand_gain_values(from_val, to_val, step):
@@ -38,6 +39,38 @@ def expand_gain_values(from_val, to_val, step):
 def format_float(f):
     """Format float value."""
     return f"{f:.2f}"
+
+def cleanup_config(config_path):
+    """
+    Clean up config file by removing obsolete fields.
+    Creates a temporary cleaned copy if needed.
+    """
+    config_path = Path(config_path)
+    config_text = config_path.read_text()
+    original_text = config_text
+    
+    # Remove lines with obsolete fields
+    obsolete_fields = [
+        'restart_process_per_combo',
+    ]
+    
+    lines = config_text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Skip lines that contain obsolete field names
+        if any(field in line for field in obsolete_fields):
+            continue
+        cleaned_lines.append(line)
+    
+    config_text = '\n'.join(cleaned_lines)
+    
+    # If we made changes, write to a temp file
+    if config_text != original_text:
+        temp_config = config_path.parent / f".{config_path.name}.cleaned"
+        temp_config.write_text(config_text)
+        return temp_config
+    
+    return config_path
 
 def generate_gain_combos(lna_from, lna_to, lna_step, pga_from, pga_to, pga_step):
     """Generate all gain combinations."""
@@ -153,6 +186,10 @@ def main():
         print(f"ERROR: Binary not found: {binary_path}")
         sys.exit(1)
     
+    # Clean up config file (remove obsolete fields)
+    print("Cleaning up config file...")
+    config_path = cleanup_config(config_path)
+    
     # Generate combos
     combos = generate_gain_combos(
         args.lna_from, args.lna_to, args.lna_step,
@@ -186,6 +223,13 @@ def main():
         if idx < len(combos) - 1:
             print(f"Waiting {args.delay}s for driver recovery...")
             time.sleep(args.delay)
+    
+    # Clean up temporary config file if it was created
+    if config_path.name.startswith('.'):
+        try:
+            config_path.unlink()
+        except Exception:
+            pass
     
     # Summary
     print(f"\n{'='*70}")
