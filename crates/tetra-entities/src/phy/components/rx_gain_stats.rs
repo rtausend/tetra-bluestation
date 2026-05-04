@@ -30,6 +30,7 @@ pub struct RxGainWindowExport {
     pub gaps_detected: u32,
     pub gap_rate: f64,
     pub stability_status: String,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +56,7 @@ pub struct RxGainSummaryExport {
     pub gaps_detected: u32,
     pub gap_rate: f64,
     pub stability_status: String,
+    pub duration_ms: u64,
     pub test_level_dbm: f64,
     pub test_tx_power_dbm: f64,
     pub test_device_type: String,
@@ -109,12 +111,12 @@ impl RxGainExportWriter {
         if !csv_path.exists() {
             Self::append_line(
                 &csv_path,
-                "timestamp,gain_combo,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode,expected_slots,detected,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,slot0_detected,slot1_detected,slot2_detected,slot3_detected,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status",
+                "timestamp,gain_combo,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode,expected_slots,detected,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,slot0_detected,slot1_detected,slot2_detected,slot3_detected,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms",
             )?;
         }
 
         let line = format!(
-            "{},\"{}\",{:.3},{:.3},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{:.4},\"{}\"",
+            "{},\"{}\",{:.3},{:.3},{},{},{},{},{},{},{},{},{:.6},{:.6},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{},{:.4},\"{}\",{}",
             row.timestamp,
             row.gain_combo,
             row.test_level_dbm,
@@ -139,7 +141,8 @@ impl RxGainExportWriter {
             row.slot3_crc_pass_rate,
             row.gaps_detected,
             row.gap_rate,
-            row.stability_status
+            row.stability_status,
+            row.duration_ms
         );
         Self::append_line(&csv_path, &line)
     }
@@ -152,7 +155,7 @@ impl RxGainExportWriter {
 
         let mut cf = File::create(self.summary_csv_path()).map_err(|e| format!("Failed to create summary CSV file: {}", e))?;
         cf.write_all(
-            b"timestamp,rank,gain_combo,detected,expected_slots,detect_rate,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,passes_required_slots,passes_slot_crc_threshold,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode\n",
+            b"timestamp,rank,gain_combo,detected,expected_slots,detect_rate,decode_attempted,decode_success,crc_ok,false_positive,crc_pass_rate,false_positive_rate,passes_required_slots,passes_slot_crc_threshold,slot0_crc_pass_rate,slot1_crc_pass_rate,slot2_crc_pass_rate,slot3_crc_pass_rate,gaps_detected,gap_rate,stability_status,duration_ms,test_level_dbm,test_tx_power_dbm,test_device_type,test_signal_mode\n",
         )
         .map_err(|e| format!("Failed to write summary CSV header: {}", e))?;
 

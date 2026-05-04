@@ -33,6 +33,8 @@ enum RxGainSweepPhase {
 struct RxGainSweepResult {
     gain_combo: HashMap<String, f64>,
     detected_bursts: u32,
+    /// Note: Named 'expected_slots' for legacy compatibility, but actually counts rxtx_timeslot ticks
+    /// (i.e., physical RX/TX operations), not TDMA slots. Detection rate = detected_bursts / expected_slots.
     expected_slots: u32,
     slot_detected: [u32; 4],
     measured_slots: u32,
@@ -48,6 +50,8 @@ struct RxGainSweepResult {
     gap_rate: f64,
     /// Status: STABLE (<3% gaps), UNSTABLE (>=3% gaps)
     stability_status: String,
+    /// Duration of measurement window in milliseconds
+    duration_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +65,7 @@ struct RxGainSweepRuntime {
     progress_log_step_bursts: u32,
     next_progress_log_bursts: u32,
     measured_bursts: u32,
+    /// Note: counts rxtx_timeslot ticks, not TDMA slots (see RxGainSweepResult.expected_slots)
     expected_slots: u32,
     slot_detected: [u32; 4],
     measured_slots: u32,
@@ -77,6 +82,8 @@ struct RxGainSweepRuntime {
     results: Vec<RxGainSweepResult>,
     /// Track detected slot times for gap analysis
     detected_slot_times: Vec<TdmaTime>,
+    /// Timestamp when measurement window started (Unix seconds)
+    window_start_unix: u64,
 }
 
 pub struct PhyBs<D: RxTxDev> {
@@ -273,6 +280,13 @@ impl<D: RxTxDev> PhyBs<D> {
         // Calculate gap-detection metrics
         let (gaps_detected, gap_rate, stability_status) = Self::calculate_gap_metrics(&runtime.detected_slot_times, runtime.expected_slots);
 
+        // Calculate measurement window duration in milliseconds
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let duration_ms = ((now_unix.saturating_sub(runtime.window_start_unix)) * 1000) as u64;
+
         let result = RxGainSweepResult {
             gain_combo: gain_combo.clone(),
             detected_bursts: runtime.measured_bursts,
@@ -288,6 +302,7 @@ impl<D: RxTxDev> PhyBs<D> {
             gaps_detected,
             gap_rate,
             stability_status: stability_status.clone(),
+            duration_ms,
         };
 
         let slot_rates = Self::slot_crc_rates(&result);
@@ -339,6 +354,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 gaps_detected,
                 gap_rate,
                 stability_status: stability_status.clone(),
+                duration_ms: result.duration_ms,
             };
 
             if let Err(err) = writer.append_window(&row) {
@@ -437,6 +453,7 @@ impl<D: RxTxDev> PhyBs<D> {
                         gaps_detected: row.gaps_detected,
                         gap_rate: row.gap_rate,
                         stability_status: row.stability_status.clone(),
+                        duration_ms: row.duration_ms,
                         test_level_dbm: runtime.test_level_dbm,
                         test_tx_power_dbm: runtime.test_tx_power_dbm,
                         test_device_type: runtime.test_device_type.clone(),
@@ -478,6 +495,7 @@ impl<D: RxTxDev> PhyBs<D> {
                 runtime.slot_detected = [0; 4];
                 runtime.measured_slots = 0;
                 runtime.detected_slot_times.clear();
+                runtime.window_start_unix = 0;
                 runtime.window_decode_baseline = config.state_read().rx_gain_decode_counters.clone();
                 runtime.phase = RxGainSweepPhase::Settling;
             }
@@ -486,6 +504,11 @@ impl<D: RxTxDev> PhyBs<D> {
                     runtime.settling_remaining -= 1;
                 } else {
                     tracing::info!(combo_index = runtime.current_idx, "rx_gain_sweep_measure_start");
+                    // Record start time for measurement window duration calculation
+                    runtime.window_start_unix = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
                     runtime.phase = RxGainSweepPhase::MeasureWindow;
                 }
             }
@@ -657,6 +680,7 @@ impl<D: RxTxDev> PhyBs<D> {
                             run_started_unix,
                             results: Vec::new(),
                             detected_slot_times: Vec::new(),
+                            window_start_unix: 0,
                         })
                     })
             } else {
