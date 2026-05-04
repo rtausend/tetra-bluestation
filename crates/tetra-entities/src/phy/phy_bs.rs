@@ -475,6 +475,19 @@ impl<D: RxTxDev> PhyBs<D> {
         }
         runtime.measured_slots = runtime.measured_slots.saturating_add(1);
 
+        if detected_bursts > 0 {
+            let progress_pct = Self::safe_ratio_u32(runtime.measured_bursts, runtime.window_bursts) * 100.0;
+            tracing::info!(
+                combo_index = runtime.current_idx,
+                bursts_in_tick = detected_bursts,
+                counted_bursts = runtime.measured_bursts,
+                target_bursts = runtime.window_bursts,
+                progress_pct,
+                measured_slots = runtime.measured_slots,
+                "rx_gain_sweep_burst_count"
+            );
+        }
+
         if runtime.measured_bursts < runtime.window_bursts
             && runtime.measured_bursts >= runtime.next_progress_log_bursts
         {
