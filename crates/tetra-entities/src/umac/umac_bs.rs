@@ -71,6 +71,24 @@ struct PendingStch {
 }
 
 impl UmacBs {
+    fn parse_guard<T, E, F>(ctx: &str, f: F) -> Option<T>
+    where
+        E: std::fmt::Debug,
+        F: FnOnce() -> Result<T, E>,
+    {
+        match panic::catch_unwind(panic::AssertUnwindSafe(f)) {
+            Ok(Ok(v)) => Some(v),
+            Ok(Err(e)) => {
+                tracing::warn!("{}: parse failed: {:?}", ctx, e);
+                None
+            }
+            Err(_) => {
+                tracing::warn!("{}: parser panicked; dropping PDU", ctx);
+                None
+            }
+        }
+    }
+
     fn clamp_pdu_window_or_drop(prim: &mut tetra_saps::tmv::TmvUnitdataInd, pdu_len_bits: usize, ctx: &str) -> bool {
         let target_end = prim.pdu.get_raw_start().saturating_add(pdu_len_bits);
         let raw_pos = prim.pdu.get_raw_pos();
@@ -403,7 +421,7 @@ impl UmacBs {
                     match pdu_type {
                         0 => self.rx_mac_access(queue, &mut message),
                         1 => self.rx_mac_end_hu(queue, &mut message),
-                        _ => panic!(),
+                        _ => tracing::warn!("invalid SCH-HU pdu_type bit {}", pdu_type),
                     }
                 }
 
@@ -444,16 +462,11 @@ impl UmacBs {
             prim.pdu.seek(0);
         }
 
-        let pdu = match MacData::from_bitbuf(&mut prim.pdu) {
-            Ok(pdu) => {
-                tracing::debug!("<- {:?}", pdu);
-                pdu
-            }
-            Err(e) => {
-                tracing::warn!("Failed parsing MacData: {:?} {}", e, prim.pdu.dump_bin());
-                return;
-            }
+        let Some(pdu) = Self::parse_guard("rx_mac_data/MacData", || MacData::from_bitbuf(&mut prim.pdu)) else {
+            tracing::warn!("Failed parsing MacData {}", prim.pdu.dump_bin());
+            return;
         };
+        tracing::debug!("<- {:?}", pdu);
 
         // Get addr, either from pdu addr field or by resolving the event label
         if pdu.event_label.is_some() {
@@ -619,16 +632,11 @@ impl UmacBs {
             prim.pdu.seek(0);
         }
 
-        let pdu = match MacAccess::from_bitbuf(&mut prim.pdu) {
-            Ok(pdu) => {
-                tracing::debug!("<- {:?}", pdu);
-                pdu
-            }
-            Err(e) => {
-                tracing::warn!("Failed parsing MacAccess: {:?} {}", e, prim.pdu.dump_bin());
-                return;
-            }
+        let Some(pdu) = Self::parse_guard("rx_mac_access/MacAccess", || MacAccess::from_bitbuf(&mut prim.pdu)) else {
+            tracing::warn!("Failed parsing MacAccess {}", prim.pdu.dump_bin());
+            return;
         };
+        tracing::debug!("<- {:?}", pdu);
 
         // Resolve event label (if supplied)
         let addr = if let Some(_label) = pdu.event_label {
@@ -784,16 +792,11 @@ impl UmacBs {
         }
 
         // Parse header and optional ChanAlloc
-        let pdu = match MacFragUl::from_bitbuf(&mut prim.pdu) {
-            Ok(pdu) => {
-                tracing::debug!("<- {:?}", pdu);
-                pdu
-            }
-            Err(e) => {
-                tracing::warn!("Failed parsing MacFragUl: {:?} {}", e, prim.pdu.dump_bin());
-                return;
-            }
+        let Some(pdu) = Self::parse_guard("rx_mac_frag_ul/MacFragUl", || MacFragUl::from_bitbuf(&mut prim.pdu)) else {
+            tracing::warn!("Failed parsing MacFragUl {}", prim.pdu.dump_bin());
+            return;
         };
+        tracing::debug!("<- {:?}", pdu);
 
         // Strip fill bits. This message is known to fill the slot.
         let mut pdu_len_bits = prim.pdu.get_len();
@@ -841,16 +844,11 @@ impl UmacBs {
         }
 
         // Parse header and optional ChanAlloc
-        let pdu = match MacEndUl::from_bitbuf(&mut prim.pdu) {
-            Ok(pdu) => {
-                tracing::debug!("<- {:?}", pdu);
-                pdu
-            }
-            Err(e) => {
-                tracing::warn!("Failed parsing MacEndUl: {:?} {}", e, prim.pdu.dump_bin());
-                return;
-            }
+        let Some(pdu) = Self::parse_guard("rx_mac_end_ul/MacEndUl", || MacEndUl::from_bitbuf(&mut prim.pdu)) else {
+            tracing::warn!("Failed parsing MacEndUl {}", prim.pdu.dump_bin());
+            return;
         };
+        tracing::debug!("<- {:?}", pdu);
 
         // Will have either length_ind or reservation_req, never none or both
         let mut pdu_len_bits = if let Some(length_ind) = pdu.length_ind {
@@ -958,16 +956,11 @@ impl UmacBs {
         }
 
         // Parse header and optional ChanAlloc
-        let pdu = match MacEndHu::from_bitbuf(&mut prim.pdu) {
-            Ok(pdu) => {
-                tracing::debug!("<- {:?}", pdu);
-                pdu
-            }
-            Err(e) => {
-                tracing::warn!("Failed parsing MacEndHu: {:?} {}", e, prim.pdu.dump_bin());
-                return;
-            }
+        let Some(pdu) = Self::parse_guard("rx_mac_end_hu/MacEndHu", || MacEndHu::from_bitbuf(&mut prim.pdu)) else {
+            tracing::warn!("Failed parsing MacEndHu {}", prim.pdu.dump_bin());
+            return;
         };
+        tracing::debug!("<- {:?}", pdu);
 
         // Will have either length_ind or reservation_req, never none or both
         let mut pdu_len_bits = if let Some(length_ind) = pdu.length_ind {
@@ -1080,16 +1073,11 @@ impl UmacBs {
             panic!()
         };
 
-        let pdu = match MacUSignal::from_bitbuf(&mut prim.pdu) {
-            Ok(pdu) => {
-                tracing::debug!("<- {:?}", pdu);
-                pdu
-            }
-            Err(e) => {
-                tracing::warn!("Failed parsing MacUSignal: {:?} {}", e, prim.pdu.dump_bin());
-                return;
-            }
+        let Some(pdu) = Self::parse_guard("rx_ul_mac_u_signal/MacUSignal", || MacUSignal::from_bitbuf(&mut prim.pdu)) else {
+            tracing::warn!("Failed parsing MacUSignal {}", prim.pdu.dump_bin());
+            return;
         };
+        tracing::debug!("<- {:?}", pdu);
 
         if pdu.second_half_stolen {
             tracing::warn!("rx_ul_mac_u_signal: second_half_stolen not implemented");
@@ -1137,16 +1125,11 @@ impl UmacBs {
             panic!()
         };
 
-        let _pdu = match MacUBlck::from_bitbuf(&mut prim.pdu) {
-            Ok(pdu) => {
-                tracing::debug!("<- {:?}", pdu);
-                pdu
-            }
-            Err(e) => {
-                tracing::warn!("Failed parsing MacUBlck: {:?} {}", e, prim.pdu.dump_bin());
-                return;
-            }
+        let Some(_pdu) = Self::parse_guard("rx_ul_mac_u_blck/MacUBlck", || MacUBlck::from_bitbuf(&mut prim.pdu)) else {
+            tracing::warn!("Failed parsing MacUBlck {}", prim.pdu.dump_bin());
+            return;
         };
+        tracing::debug!("<- {:?}", _pdu);
 
         // TODO implement reservation handling for MAC-U-BLCK.
         // For now, do not abort the whole stack when this optional/rare uplink PDU appears.
