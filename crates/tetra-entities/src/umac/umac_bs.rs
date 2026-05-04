@@ -420,7 +420,13 @@ impl UmacBs {
         let SapMsgInner::TmvUnitdataInd(prim) = &mut message.msg else {
             panic!()
         };
-        assert!(prim.pdu.get_pos() == 0); // We should be at the start of the MAC PDU
+        if prim.pdu.get_pos() != 0 {
+            tracing::warn!(
+                "rx_mac_data called with non-zero bit position {}; rewinding to 0",
+                prim.pdu.get_pos()
+            );
+            prim.pdu.seek(0);
+        }
 
         let pdu = match MacData::from_bitbuf(&mut prim.pdu) {
             Ok(pdu) => {
@@ -438,7 +444,10 @@ impl UmacBs {
             unimplemented_log!("event labels not implemented");
             return;
         }
-        let addr = pdu.addr.unwrap();
+        let Some(addr) = pdu.addr else {
+            tracing::warn!("rx_mac_data: missing address without event label; dropping PDU");
+            return;
+        };
 
         let (mut pdu_len_bits, is_frag_start, second_half_stolen, is_null_pdu) = {
             if let Some(len_ind) = pdu.length_ind {
@@ -457,15 +466,19 @@ impl UmacBs {
                         // Start of fragmentation
                         (prim.pdu.get_len(), true, false, false)
                     }
-                    _ => panic!("rx_mac_data: Invalid length_ind {}", len_ind),
+                    _ => {
+                        tracing::warn!("rx_mac_data: Invalid length_ind {}", len_ind);
+                        return;
+                    }
                 }
             } else {
                 // We have a capacity request
+                let frag_start = pdu.frag_flag.unwrap_or(false);
                 tracing::trace!(
                     "rx_mac_data: cap_req {}",
-                    if pdu.frag_flag.unwrap() { "with frag_start" } else { "" }
+                    if frag_start { "with frag_start" } else { "" }
                 );
-                (prim.pdu.get_len(), pdu.frag_flag.unwrap(), false, false)
+                (prim.pdu.get_len(), frag_start, false, false)
             }
         };
 
