@@ -61,7 +61,7 @@ for ((lna = LNA_FROM; lna <= LNA_TO; lna += LNA_STEP)); do
         echo "[$counter/$total] LNA=$lna, PGA=$pga"
         echo "=========================================="
         
-        if "$BINARY" "$CONFIG" --rx_gain_test_single_combo "lna=$lna pga=$pga"; then
+        if "$BINARY" "$CONFIG" --rx-gain-test-single-combo "lna=$lna pga=$pga"; then
             ((succeeded++))
         else
             echo "ERROR: Combo $counter failed!"

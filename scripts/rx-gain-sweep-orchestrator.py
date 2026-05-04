@@ -65,7 +65,7 @@ def run_single_combo(binary_path, config_path, combo, combo_idx, total_combos):
     cmd = [
         str(binary_path),
         str(config_path),
-        "--rx_gain_test_single_combo",
+        "--rx-gain-test-single-combo",
         combo_str
     ]
     
