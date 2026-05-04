@@ -608,7 +608,13 @@ impl<D: RxTxDev> PhyBs<D> {
                     runtime.phase = RxGainSweepPhase::ApplyGains;
                 } else {
                     runtime.phase = RxGainSweepPhase::Completed;
-                    Self::report_rx_gain_sweep_results(runtime);
+                    if runtime.restart_process_per_combo {
+                        tracing::warn!(
+                            "rx_gain_sweep completed with process-restart mode; skipping in-memory summary because results are split across processes"
+                        );
+                    } else {
+                        Self::report_rx_gain_sweep_results(runtime);
+                    }
                     if runtime.auto_exit {
                         tracing::info!("rx_gain_sweep auto_exit enabled, terminating process");
                         std::process::exit(0);
