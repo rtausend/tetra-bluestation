@@ -58,4 +58,10 @@ pub trait RxTxDev {
     fn reinitialize_for_gain_sweep(&mut self) -> Result<(), RxTxDevError> {
         Ok(())
     }
+
+    /// Optional runtime hook to reinitialize and apply gain combo atomically.
+    fn reinitialize_and_apply_rx_gain_combo(&mut self, gains: &HashMap<String, f64>) -> Result<(), RxTxDevError> {
+        self.reinitialize_for_gain_sweep()?;
+        self.apply_rx_gain_combo(gains)
+    }
 }

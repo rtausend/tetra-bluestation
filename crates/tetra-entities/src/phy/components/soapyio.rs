@@ -63,6 +63,13 @@ macro_rules! soapycheck {
 
 impl SoapyIo {
     pub fn new(cfg: &SharedConfig) -> Result<Self, soapysdr::Error> {
+        Self::new_with_rx_gain_override(cfg, None)
+    }
+
+    pub fn new_with_rx_gain_override(
+        cfg: &SharedConfig,
+        rx_gain_override: Option<&HashMap<String, f64>>,
+    ) -> Result<Self, soapysdr::Error> {
         let binding = cfg.config();
         let soapy_cfg = binding
             .phy_io
@@ -134,6 +141,30 @@ impl SoapyIo {
                     "set RX gain",
                     dev.set_gain_element(soapysdr::Direction::Rx, rx_ch, name.as_str(), *gain)
                 );
+            }
+
+            if let Some(override_gains) = rx_gain_override {
+                for (name, gain) in override_gains {
+                    soapycheck!(
+                        "set RX gain override",
+                        dev.set_gain_element(soapysdr::Direction::Rx, rx_ch, name.as_str(), *gain)
+                    );
+
+                    let applied = soapycheck!(
+                        "read back RX gain override",
+                        dev.gain_element(soapysdr::Direction::Rx, rx_ch, name.as_str())
+                    );
+                    let delta = (applied - *gain).abs();
+                    if delta > 0.25 {
+                        return Err(soapysdr::Error {
+                            code: soapysdr::ErrorCode::Other,
+                            message: format!(
+                                "RX gain override mismatch for {}: requested {}, applied {}, delta {}",
+                                name, gain, applied, delta
+                            ),
+                        });
+                    }
+                }
             }
         }
 

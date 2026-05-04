@@ -497,14 +497,8 @@ impl<D: RxTxDev> PhyBs<D> {
             RxGainSweepPhase::ApplyGains => {
                 let combo = &runtime.combos[runtime.current_idx];
 
-                if let Err(err) = self.rxtxdev.reinitialize_for_gain_sweep() {
-                    tracing::error!("Failed to reinitialize RX/TX device for gain combo: {:?}", err);
-                    runtime.phase = RxGainSweepPhase::Completed;
-                    return;
-                }
-
-                if let Err(err) = self.rxtxdev.apply_rx_gain_combo(combo) {
-                    tracing::error!("Failed to apply runtime RX gain combo: {:?}", err);
+                if let Err(err) = self.rxtxdev.reinitialize_and_apply_rx_gain_combo(combo) {
+                    tracing::error!("Failed to reinitialize/apply RX gain combo: {:?}", err);
                     runtime.phase = RxGainSweepPhase::Completed;
                     return;
                 }
