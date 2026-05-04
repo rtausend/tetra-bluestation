@@ -403,6 +403,11 @@ impl SoapyIo {
         for (name, gain) in gains {
             let canonical_name = Self::resolve_rx_gain_name_for_device(&self.dev, self.rx_ch, name.as_str())?;
 
+            // Read BEFORE value for comparison
+            let before = self
+                .dev
+                .gain_element(soapysdr::Direction::Rx, self.rx_ch, canonical_name.as_str())?;
+
             self.dev
                 .set_gain_element(soapysdr::Direction::Rx, self.rx_ch, canonical_name.as_str(), *gain)?;
 
@@ -412,9 +417,10 @@ impl SoapyIo {
                 .gain_element(soapysdr::Direction::Rx, self.rx_ch, canonical_name.as_str())?;
             let delta = (applied - *gain).abs();
 
-            tracing::debug!(
+            tracing::info!(
                 gain_name = name.as_str(),
                 canonical_gain_name = canonical_name.as_str(),
+                before_value = before,
                 requested_gain = *gain,
                 applied_gain = applied,
                 delta,
