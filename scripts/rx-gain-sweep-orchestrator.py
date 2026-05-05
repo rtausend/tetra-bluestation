@@ -143,8 +143,11 @@ def generate_gain_combos(lna_from, lna_to, lna_step, pga_from, pga_to, pga_step)
     
     return combos
 
-def run_single_combo(binary_path, config_path, combo, combo_idx, total_combos):
+def run_single_combo(binary_path, config_path, combo, combo_idx, total_combos, output_csv=None, processed_files=None):
     """Run bluestation-bs with a single gain combo."""
+    if processed_files is None:
+        processed_files = set()
+    
     combo_str = f"lna={format_float(combo['lna'])} pga={format_float(combo['pga'])}"
     
     print(f"\n{'='*70}")
@@ -164,7 +167,34 @@ def run_single_combo(binary_path, config_path, combo, combo_idx, total_combos):
     
     try:
         result = subprocess.run(cmd, timeout=120)  # 2 min timeout per combo
-        return result.returncode == 0
+        success = result.returncode == 0
+        
+        # If output_csv specified, collect results from newly generated files
+        if output_csv and success:
+            config_dir = config_abs.parent
+            csv_files = sorted(glob.glob(str(config_dir / "rx_gain_window_*.csv")))
+            
+            for csv_file in csv_files:
+                if csv_file not in processed_files:
+                    processed_files.add(csv_file)
+                    # Append this file's rows to output
+                    try:
+                        with open(csv_file, 'r') as f:
+                            reader = csv.DictReader(f)
+                            if reader.fieldnames:
+                                rows = list(reader)
+                                if rows:
+                                    # Write header if output doesn't exist
+                                    write_header = not Path(output_csv).exists()
+                                    with open(output_csv, 'a', newline='') as out:
+                                        writer = csv.DictWriter(out, fieldnames=reader.fieldnames)
+                                        if write_header:
+                                            writer.writeheader()
+                                        writer.writerows(rows)
+                    except Exception as e:
+                        print(f"  Warning: Could not append {csv_file}: {e}")
+        
+        return success
     except subprocess.TimeoutExpired:
         print(f"ERROR: Combo {combo_idx+1} timed out!")
         return False
@@ -270,9 +300,11 @@ def main():
     # Run all combos
     succeeded = 0
     failed = 0
+    processed_files = set()
     
     for idx, combo in enumerate(combos):
-        success = run_single_combo(binary_path, config_path, combo, idx, len(combos))
+        success = run_single_combo(binary_path, config_path, combo, idx, len(combos), 
+                                   output_csv=args.output, processed_files=processed_files)
         
         if success:
             succeeded += 1
@@ -291,10 +323,6 @@ def main():
         except Exception:
             pass
     
-    # Merge CSV results if requested
-    if args.output:
-        merge_csv_results(config_path.parent, args.output)
-    
     # Summary
     print(f"\n{'='*70}")
     print(f"Sweep Complete!")
@@ -303,7 +331,16 @@ def main():
     print(f"Success:  {succeeded}")
     print(f"Failed:   {failed}")
     if args.output:
-        print(f"Output:   {args.output}")
+        output_path = Path(args.output).resolve()
+        print(f"Output:   {output_path}")
+        if output_path.exists():
+            # Count rows in output file
+            try:
+                with open(output_path, 'r') as f:
+                    row_count = sum(1 for _ in f) - 1  # -1 for header
+                print(f"Rows:     {row_count}")
+            except:
+                pass
     print(f"{'='*70}\n")
     
     sys.exit(0 if failed == 0 else 1)
